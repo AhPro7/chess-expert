@@ -2,6 +2,10 @@
 data/*.pgn
 data/*.zip
 data/*.npz
+data/samples/
+
+# TensorBoard logs (uploaded to HF Hub instead of git)
+runs/
 
 # Python
 __pycache__/

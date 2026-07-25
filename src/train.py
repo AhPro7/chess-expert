@@ -17,6 +17,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import datetime
 import os
 import time
 
@@ -25,6 +26,40 @@ import torch
 import torch.nn as nn
 
 from .model import ChessPolicyNet
+
+
+def _make_writer(logdir: str):
+    """Create a TensorBoard SummaryWriter, or None if tensorboard is missing."""
+    if not logdir:
+        return None
+    try:
+        from torch.utils.tensorboard import SummaryWriter
+    except ImportError:
+        print("tensorboard not installed — skipping TB logging (pip install tensorboard)")
+        return None
+    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    run_dir = os.path.join(logdir, stamp)
+    print(f"TensorBoard logs -> {run_dir}   (view: tensorboard --logdir {logdir})")
+    return SummaryWriter(run_dir)
+
+
+def _selfplay_frames(checkpoint: str, n_plies: int = 16, depth: int = 0):
+    """Play a short game with the current model and return frames (K,H,W,3) uint8."""
+    import chess
+
+    from demo.render import render_board
+    from .play import ChessEngine
+
+    engine = ChessEngine(checkpoint)
+    board = chess.Board()
+    frames = [np.asarray(render_board(board), dtype=np.uint8)]
+    for _ in range(n_plies):
+        move = engine.select_move(board, temperature=0.4, top_k=5, depth=depth)
+        if move is None or board.is_game_over(claim_draw=True):
+            break
+        board.push(move)
+        frames.append(np.asarray(render_board(board, last_move=move), dtype=np.uint8))
+    return np.stack(frames)
 
 
 def train(args: argparse.Namespace) -> None:
@@ -101,6 +136,8 @@ def train(args: argparse.Namespace) -> None:
     policy_criterion = nn.CrossEntropyLoss()
     value_criterion = nn.MSELoss()
     value_weight = args.value_weight if has_values else 0.0
+    writer = _make_writer(args.logdir)
+    global_step = 0
     n_params = sum(p.numel() for p in model.parameters())
     print(f"Model: {cfg['channels']}ch x {cfg['num_blocks']} blocks — {n_params:,} params")
 
@@ -151,6 +188,8 @@ def train(args: argparse.Namespace) -> None:
         last_log = start
         epoch_loss = torch.zeros((), device=device)
         win_loss, win_correct = zeros()
+        win_ploss = torch.zeros((), device=device)  # policy loss sum (window)
+        win_vloss = torch.zeros((), device=device)  # value  loss sum (window)
         win_seen = 0
 
         epoch_order = train_idx[torch.randperm(train_n)]  # reshuffle each epoch
@@ -161,9 +200,10 @@ def train(args: argparse.Namespace) -> None:
             optimizer.zero_grad(set_to_none=True)
             with torch.autocast(device_type="cuda", dtype=amp_dtype, enabled=use_amp):
                 logits, value = model(xb)
-                loss = policy_criterion(logits, yb)
-                if value_weight:
-                    loss = loss + value_weight * value_criterion(value, vb)
+                p_loss = policy_criterion(logits, yb)
+                v_loss = value_criterion(value, vb) if value_weight else \
+                    torch.zeros((), device=device)
+                loss = p_loss + value_weight * v_loss
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
@@ -172,17 +212,30 @@ def train(args: argparse.Namespace) -> None:
             batch_loss = loss.detach() * n
             epoch_loss += batch_loss
             win_loss += batch_loss
+            win_ploss += p_loss.detach() * n
+            win_vloss += v_loss.detach() * n
             win_correct += (logits.detach().argmax(dim=1) == yb).sum()
             win_seen += n
+            global_step += 1
 
             if i % args.log_interval == 0 or i == total_batches:
                 now = time.time()
                 pos_per_s = win_seen / max(now - last_log, 1e-9)
                 pct = i / total_batches
                 eta = (now - start) / pct - (now - start)
-                # Two .item() syncs per log interval (not per batch).
+                # A few .item() syncs per log interval (not per batch).
                 avg_loss = (win_loss / win_seen).item()
+                avg_ploss = (win_ploss / win_seen).item()
+                avg_vloss = (win_vloss / win_seen).item()
                 acc = (win_correct.float() / win_seen).item()
+                if writer:
+                    writer.add_scalar("train/loss_total", avg_loss, global_step)
+                    writer.add_scalar("train/loss_policy", avg_ploss, global_step)
+                    writer.add_scalar("train/loss_value", avg_vloss, global_step)
+                    writer.add_scalar("train/move_match", acc, global_step)
+                    writer.add_scalar("train/pos_per_sec", pos_per_s, global_step)
+                    writer.add_scalar("train/lr", optimizer.param_groups[0]["lr"],
+                                      global_step)
                 print(
                     f"  epoch {epoch:2d} | batch {i:>5d}/{total_batches} "
                     f"({pct:4.0%}) | loss {avg_loss:.3f} | "
@@ -192,6 +245,8 @@ def train(args: argparse.Namespace) -> None:
                 )
                 last_log = now
                 win_loss, win_correct = zeros()
+                win_ploss = torch.zeros((), device=device)
+                win_vloss = torch.zeros((), device=device)
                 win_seen = 0
 
         train_loss = (epoch_loss / train_n).item()
@@ -245,6 +300,25 @@ def train(args: argparse.Namespace) -> None:
             resume_path,
         )
 
+        # ---- TensorBoard: per-epoch scalars + a self-play board filmstrip ----
+        if writer:
+            writer.add_scalar("val/move_match", val_acc, epoch)
+            writer.add_scalar("val/value_mae", val_mae, epoch)
+            writer.add_scalar("epoch/train_loss", train_loss, epoch)
+            writer.add_scalar("epoch/seconds", time.time() - start, epoch)
+            if args.tb_images:
+                try:
+                    frames = _selfplay_frames(
+                        args.out, n_plies=args.tb_image_plies,
+                        depth=2 if value_weight else 0,
+                    )
+                    writer.add_images("selfplay/game", frames, epoch,
+                                      dataformats="NHWC")
+                except Exception as exc:  # never let logging kill training
+                    print(f"  (self-play image logging skipped: {exc})")
+
+    if writer:
+        writer.close()
     print(f"Saved checkpoint -> {args.out}  (resume state -> {resume_path})")
 
 
@@ -263,6 +337,15 @@ def main() -> None:
     parser.add_argument("--channels", type=int, default=128)
     parser.add_argument("--blocks", type=int, default=10)
     parser.add_argument("--val-split", type=float, default=0.05)
+    parser.add_argument(
+        "--logdir", default="runs",
+        help="TensorBoard log dir (empty string disables TB logging)",
+    )
+    parser.add_argument(
+        "--tb-images", action=argparse.BooleanOptionalAction, default=True,
+        help="Log a self-play board filmstrip to TensorBoard each epoch",
+    )
+    parser.add_argument("--tb-image-plies", type=int, default=16)
     parser.add_argument(
         "--value-weight", type=float, default=1.0,
         help="Weight of the value-head MSE loss (0 = policy only)",

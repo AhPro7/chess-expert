@@ -94,6 +94,17 @@ python -m src.train --data data/samples --out models/chess_expert.pt \
 `--resume models/chess_expert.resume.pt` (a sidecar written every epoch);
 `--epochs` is the total target.
 
+**Monitoring:** training logs to `runs/` for TensorBoard — loss (total/policy/value),
+move-match, value MAE, throughput, LR, and a **self-play board filmstrip each epoch**
+(Images tab). View with `tensorboard --logdir runs`.
+
+**Share:** push the checkpoint + logs to the Hugging Face Hub:
+
+```bash
+huggingface-cli login
+python scripts/upload_hf.py --repo-id YOUR_USERNAME/chess-expert
+```
+
 ---
 
 ## Project layout

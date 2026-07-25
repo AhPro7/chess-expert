@@ -6,3 +6,8 @@ torch>=2.0
 # Demo / visualization (CPU only)
 matplotlib>=3.7
 pillow>=10.0
+
+# Logging & sharing
+tensorboard>=2.12
+huggingface_hub>=0.20
+ipywidgets>=8.0   # clickable board in Colab/Jupyter
