@@ -35,14 +35,18 @@ def train(args: argparse.Namespace) -> None:
     )
     use_cuda = device.type == "cuda"
     print(f"Device: {device}")
+    if use_cuda:
+        print(f"GPU: {torch.cuda.get_device_name(0)}")
+
+    use_amp = use_cuda and args.amp == "on"
 
     # ---- Speed switches (CUDA only) ---------------------------------------
     if use_cuda:
-        torch.backends.cudnn.benchmark = True          # autotune conv kernels
-        torch.backends.cuda.matmul.allow_tf32 = True   # TF32 matmuls
+        # cuDNN autotune helps in fp32, but under fp16 it can spend minutes
+        # searching (or hang) on some cards — so turn it off when AMP is on.
+        torch.backends.cudnn.benchmark = not use_amp
+        torch.backends.cuda.matmul.allow_tf32 = True   # TF32 matmuls (Ampere+)
         torch.backends.cudnn.allow_tf32 = True
-
-    use_amp = use_cuda and args.amp == "on"
     # bf16 needs no loss scaling; fp16 does. Keep this contract dead simple.
     amp_dtype = (
         torch.bfloat16 if (use_cuda and torch.cuda.is_bf16_supported())
@@ -90,12 +94,22 @@ def train(args: argparse.Namespace) -> None:
             xb = xb.to(memory_format=torch.channels_last)
         return xb, yb
 
+    # Accumulate stats as GPU tensors and only .item() them at log time. Calling
+    # .item() every batch forces a GPU->CPU sync that stalls the whole pipeline;
+    # doing it once per log interval (not every batch) removes ~50 stalls per log.
+    def zeros():
+        return (
+            torch.zeros((), device=device),  # loss sum
+            torch.zeros((), device=device, dtype=torch.long),  # correct
+        )
+
     for epoch in range(1, args.epochs + 1):
         model.train()
         start = time.time()
         last_log = start
-        running_loss = 0.0
-        win_loss, win_correct, win_seen = 0.0, 0, 0
+        epoch_loss = torch.zeros((), device=device)
+        win_loss, win_correct = zeros()
+        win_seen = 0
 
         epoch_order = train_idx[torch.randperm(train_n)]  # reshuffle each epoch
         for i in range(1, total_batches + 1):
@@ -111,9 +125,10 @@ def train(args: argparse.Namespace) -> None:
             scaler.update()
 
             n = yb.size(0)
-            running_loss += loss.item() * n
-            win_loss += loss.item() * n
-            win_correct += (logits.argmax(dim=1) == yb).sum().item()
+            batch_loss = loss.detach() * n
+            epoch_loss += batch_loss
+            win_loss += batch_loss
+            win_correct += (logits.detach().argmax(dim=1) == yb).sum()
             win_seen += n
 
             if i % args.log_interval == 0 or i == total_batches:
@@ -121,30 +136,35 @@ def train(args: argparse.Namespace) -> None:
                 pos_per_s = win_seen / max(now - last_log, 1e-9)
                 pct = i / total_batches
                 eta = (now - start) / pct - (now - start)
+                # Two .item() syncs per log interval (not per batch).
+                avg_loss = (win_loss / win_seen).item()
+                acc = (win_correct.float() / win_seen).item()
                 print(
                     f"  epoch {epoch:2d} | batch {i:>5d}/{total_batches} "
-                    f"({pct:4.0%}) | loss {win_loss / win_seen:.3f} | "
-                    f"move-match {win_correct / win_seen:5.1%} | "
+                    f"({pct:4.0%}) | loss {avg_loss:.3f} | "
+                    f"move-match {acc:5.1%} | "
                     f"{pos_per_s:.0f} pos/s | epoch ETA {eta / 60:4.1f}m",
                     flush=True,
                 )
                 last_log = now
-                win_loss, win_correct, win_seen = 0.0, 0, 0
+                win_loss, win_correct = zeros()
+                win_seen = 0
 
-        train_loss = running_loss / train_n
+        train_loss = (epoch_loss / train_n).item()
 
         # ---- Validation ----
         model.eval()
-        val_correct, val_seen = 0, 0
+        val_correct = torch.zeros((), device=device, dtype=torch.long)
+        val_seen = 0
         with torch.no_grad():
             for start_j in range(0, val_n, bs):
                 batch_idx = val_idx[start_j : start_j + bs]
                 xb, yb = fetch(batch_idx)
                 with torch.autocast(device_type="cuda", dtype=amp_dtype, enabled=use_amp):
                     logits = model(xb)
-                val_correct += (logits.argmax(dim=1) == yb).sum().item()
+                val_correct += (logits.argmax(dim=1) == yb).sum()
                 val_seen += yb.size(0)
-        val_acc = val_correct / val_seen
+        val_acc = (val_correct.float() / val_seen).item()
 
         print(
             f"Epoch {epoch:2d}/{args.epochs} DONE | "
