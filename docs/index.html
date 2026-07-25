@@ -3,219 +3,651 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Chess Expert — play a neural net</title>
+<title>Chess Expert — Play a Neural Net</title>
+<meta name="description" content="Challenge a neural network trained on 1M+ grandmaster games. Runs entirely in your browser — no server, no GPU required.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <style>
-  :root { --light:#EBECD0; --dark:#779556; --sel:#F6F169; --tgt:#F7EC74; }
-  * { box-sizing: border-box; }
-  body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-         background:#1e1e1e; color:#eee; display:flex; flex-direction:column;
-         align-items:center; padding:18px; }
-  h1 { font-size:22px; margin:4px 0; }
-  .sub { color:#aaa; font-size:14px; max-width:520px; text-align:center; margin:0 0 12px; }
-  .sub a { color:#8ab4f8; }
-  #status { font-size:17px; font-weight:600; height:24px; margin:10px 0; }
-  #board { display:grid; grid-template-columns:repeat(8,1fr); width:min(90vw,480px);
-           aspect-ratio:1/1; border:3px solid #3a3a3a; user-select:none; }
-  .sq { display:flex; align-items:center; justify-content:center; position:relative;
-        font-size:min(11vw,58px); line-height:1; cursor:pointer; }
-  .sq.light { background:var(--light); } .sq.dark { background:var(--dark); }
-  .sq.sel { background:var(--sel) !important; }
-  .sq.tgt::after { content:""; position:absolute; width:28%; height:28%;
-        border-radius:50%; background:rgba(0,0,0,.28); }
-  .sq.tgt.occupied::after { width:88%; height:88%; border-radius:50%;
-        background:none; border:4px solid rgba(0,0,0,.28); }
-  .wp { color:#fff; text-shadow:0 0 2px #000,0 0 2px #000; }
-  .bp { color:#111; text-shadow:0 0 1px rgba(255,255,255,.4); }
-  .row { display:flex; gap:10px; margin-top:14px; align-items:center; }
-  button { font-size:15px; padding:8px 16px; border:none; border-radius:8px;
-           cursor:pointer; background:#4a4a4a; color:#eee; }
-  button.primary { background:#2e7d32; }
-  select { font-size:14px; padding:6px; border-radius:6px; }
-  #loading { color:#f6c343; }
+  :root {
+    --sq-light: #EEEED2;
+    --sq-dark:  #769656;
+    --sq-sel:   rgba(246,246,105,0.75);
+    --sq-last:  rgba(205,210,106,0.65);
+    --bg:       #161512;
+    --surface:  #1e1c1a;
+    --surface2: #272422;
+    --border:   #3a3733;
+    --text:     #e8e6e3;
+    --muted:    #9e9a94;
+    --accent:   #759900;
+    --accent-h: #8ab000;
+    --gold:     #f6a623;
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'Inter', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 22px 12px 48px;
+    gap: 0;
+  }
+
+  /* ── Header ── */
+  header {
+    text-align: center;
+    margin-bottom: 18px;
+  }
+  header h1 {
+    font-size: clamp(20px, 5vw, 30px);
+    font-weight: 700;
+    letter-spacing: -0.5px;
+    background: linear-gradient(135deg, #fff 30%, #b8a878);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  header p {
+    color: var(--muted);
+    font-size: 13px;
+    margin-top: 5px;
+    max-width: 460px;
+    line-height: 1.5;
+  }
+  header a { color: #7eaee8; text-decoration: none; }
+  header a:hover { text-decoration: underline; }
+
+  /* ── Main wrapper ── */
+  .main {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+    width: 100%;
+    max-width: 520px;
+  }
+
+  /* ── Status bar ── */
+  .status-bar {
+    width: 100%;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 11px 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 9px;
+    min-height: 46px;
+  }
+  #status { font-size: 15px; font-weight: 600; }
+  #loading { color: var(--gold); }
+
+  .pulse-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--accent);
+    flex-shrink: 0;
+    display: none;
+    animation: pulse 1.4s ease-in-out infinite;
+  }
+  .pulse-dot.on { display: block; }
+  @keyframes pulse {
+    0%,100% { opacity:1; transform:scale(1); }
+    50%      { opacity:0.35; transform:scale(0.75); }
+  }
+
+  /* ── Board + coordinates ── */
+  .board-shell {
+    display: flex;
+    align-items: flex-start;
+    gap: 0;
+  }
+  .rank-labels {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-around;
+    height: min(90vw, 480px);
+    padding-right: 5px;
+    padding-bottom: 22px; /* offset for file labels row */
+  }
+  .rank-labels span, .file-labels span {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--muted);
+    line-height: 1;
+    text-align: center;
+    width: 12px;
+    display: inline-block;
+  }
+  .file-labels {
+    display: flex;
+    justify-content: space-around;
+    padding-top: 5px;
+    padding-left: 0;
+  }
+  .file-labels span { width: calc(min(90vw, 480px) / 8); }
+
+  #board {
+    display: grid;
+    grid-template-columns: repeat(8, 1fr);
+    width: min(90vw, 480px);
+    aspect-ratio: 1 / 1;
+    border: 2px solid #111;
+    border-radius: 3px;
+    overflow: hidden;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.6), 0 2px 8px rgba(0,0,0,0.4);
+    user-select: none;
+  }
+
+  .sq {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    font-size: min(10vw, 54px);
+    line-height: 1;
+    cursor: pointer;
+    transition: filter 0.08s;
+  }
+  .sq:hover { filter: brightness(1.12); }
+  .sq.light { background: var(--sq-light); }
+  .sq.dark  { background: var(--sq-dark); }
+  .sq.sel   { background: var(--sq-sel)  !important; }
+  .sq.last  { background: var(--sq-last) !important; }
+
+  /* move target indicators */
+  .sq.tgt::after {
+    content: "";
+    position: absolute;
+    width: 30%; height: 30%;
+    border-radius: 50%;
+    background: rgba(0,0,0,0.22);
+    pointer-events: none;
+  }
+  .sq.tgt.occ::after {
+    width: 90%; height: 90%;
+    background: transparent;
+    border: 5px solid rgba(0,0,0,0.22);
+    border-radius: 50%;
+  }
+
+  /* piece styling — white pieces use outline Unicode, black use filled */
+  .pw {
+    color: #fff;
+    text-shadow: 0 0 3px #000, 0 0 2px #000, 0 1px 4px rgba(0,0,0,0.9);
+    pointer-events: none; line-height: 1;
+  }
+  .pb {
+    color: #1a1a1a;
+    text-shadow: 0 1px 2px rgba(255,255,255,0.35);
+    pointer-events: none; line-height: 1;
+  }
+
+  /* ── Controls panel ── */
+  .panel {
+    width: 100%;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  .ctrl-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  .ctrl-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  /* toggle button group */
+  .btn-group { display: flex; gap: 5px; flex-wrap: wrap; justify-content: flex-end; }
+  .tog {
+    padding: 6px 12px;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    background: var(--surface2);
+    color: var(--muted);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.14s;
+    font-family: inherit;
+  }
+  .tog:hover { border-color: #5a5753; color: var(--text); }
+  .tog.active { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+
+  /* difficulty colors */
+  .diff-tog[data-d="0"].active { background: #3d7a3d; border-color: #4d9a4d; }
+  .diff-tog[data-d="1"].active { background: #7a7000; border-color: #b0a200; }
+  .diff-tog[data-d="2"].active { background: #8a4a00; border-color: #c07000; }
+  .diff-tog[data-d="3"].active { background: #7a1a1a; border-color: #b02020; }
+
+  .diff-desc {
+    font-size: 11px;
+    color: var(--muted);
+    text-align: right;
+    line-height: 1.4;
+    min-height: 14px;
+  }
+
+  /* new game button */
+  .btn-new {
+    width: 100%;
+    padding: 11px;
+    border: none;
+    border-radius: 8px;
+    background: var(--accent);
+    color: #fff;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+    letter-spacing: 0.2px;
+    transition: background 0.14s, transform 0.1s;
+  }
+  .btn-new:hover  { background: var(--accent-h); }
+  .btn-new:active { transform: scale(0.98); }
+
+  .move-num {
+    font-size: 11px;
+    color: var(--muted);
+    text-align: center;
+  }
 </style>
 </head>
 <body>
-  <h1>♟️ Chess Expert</h1>
-  <p class="sub">A neural network that learned chess from <b>grandmaster games</b>,
-     running entirely in your browser (ONNX). It plays solid, human-like chess —
-     and, having no deep search, the occasional blunder.
-     <a href="https://github.com/AhPro7/chess-expert" target="_blank">Code</a></p>
 
-  <div id="status"><span id="loading">Loading model…</span></div>
-  <div id="board"></div>
-  <div class="row">
-    <label>You play
-      <select id="color" autocomplete="off">
-        <option value="w">White</option>
-        <option value="b">Black</option>
-      </select>
-    </label>
-    <button id="new" class="primary">↻ New game</button>
+<header>
+  <h1>♟ Chess Expert</h1>
+  <p>A neural net trained on <b style="color:var(--text)">grandmaster games</b>, running in your browser via ONNX (no server, no GPU).
+     <a href="https://github.com/AhPro7/chess-expert" target="_blank">Code</a> ·
+     <a href="https://huggingface.co/Ahmed007/chess-expert" target="_blank">Model</a>
+  </p>
+</header>
+
+<div class="main">
+
+  <!-- Status -->
+  <div class="status-bar">
+    <div class="pulse-dot" id="dot"></div>
+    <div id="status"><span id="loading">⏳ Loading model…</span></div>
   </div>
 
+  <!-- Board with coordinates -->
+  <div class="board-shell">
+    <div class="rank-labels" id="ranks"></div>
+    <div>
+      <div id="board"></div>
+      <div class="file-labels" id="files"></div>
+    </div>
+  </div>
+
+  <!-- Controls -->
+  <div class="panel">
+
+    <!-- Side selector -->
+    <div class="ctrl-row">
+      <span class="ctrl-label">You play</span>
+      <div class="btn-group">
+        <button class="tog active" data-color="w" id="btn-w">♔ White</button>
+        <button class="tog"        data-color="b" id="btn-b">♚ Black</button>
+      </div>
+    </div>
+
+    <!-- Difficulty -->
+    <div class="ctrl-row">
+      <span class="ctrl-label">Difficulty</span>
+      <div class="btn-group">
+        <button class="tog diff-tog active" data-d="0">Beginner</button>
+        <button class="tog diff-tog"        data-d="1">Club</button>
+        <button class="tog diff-tog"        data-d="2">Advanced</button>
+        <button class="tog diff-tog"        data-d="3">Master</button>
+      </div>
+    </div>
+    <div class="diff-desc" id="ddesc">Samples moves with randomness — great for beginners</div>
+
+    <!-- New game -->
+    <button class="btn-new" id="btn-new">↺ New Game</button>
+  </div>
+
+  <div class="move-num" id="movenum"></div>
+</div>
+
+<!-- onnxruntime-web (single-threaded WASM — works on static hosts with no COOP/COEP) -->
 <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.19.2/dist/ort.min.js"></script>
 <script type="module">
-import { Chess } from "./chess.js";   // vendored locally (ES module)
-// Static Spaces / GitHub Pages don't send COOP/COEP headers, so multi-threaded
-// WASM won't work — force single-threaded and load the wasm from the CDN.
+import { Chess } from "./chess.js";
+
 ort.env.wasm.numThreads = 1;
-ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.19.2/dist/";
+ort.env.wasm.wasmPaths  = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.19.2/dist/";
 
-const PIECE = { p:"♟", n:"♞", b:"♝", r:"♜", q:"♛", k:"♚" };
-const PLANE = { p:0, n:1, b:2, r:3, q:4, k:5 };
-const boardEl = document.getElementById("board");
+// ── Piece symbols ────────────────────────────────────────────────────────────
+// FIX: use HOLLOW outline symbols for White, FILLED symbols for Black.
+// Previously both colors used the filled black glyphs — this made white pieces
+// look like white-painted shadows rather than proper chess pieces.
+const PIECE_W = { p:"♙", n:"♘", b:"♗", r:"♖", q:"♕", k:"♔" };
+const PIECE_B = { p:"♟", n:"♞", b:"♝", r:"♜", q:"♛", k:"♚" };
+const PLANE   = { p:0, n:1, b:2, r:3, q:4, k:5 };
+
+// ── Difficulty presets ───────────────────────────────────────────────────────
+// depth  : plies of value-head negamax (0 = policy only)
+// topK   : candidate moves searched per node
+// temp   : sampling temperature (0 = greedy)
+const DIFF = [
+  { label:"Beginner",  depth:0, topK:1,  temp:1.6,  desc:"Samples moves with randomness — great for beginners" },
+  { label:"Club",      depth:0, topK:1,  temp:0,    desc:"Greedy policy — always plays the model's top move" },
+  { label:"Advanced",  depth:1, topK:5,  temp:0,    desc:"1-ply value search — avoids obvious blunders (~1 s/move)" },
+  { label:"Master",    depth:2, topK:5,  temp:0,    desc:"2-ply value search — strong, may take a few seconds" },
+];
+let diffIdx = 0;
+
+// ── State ────────────────────────────────────────────────────────────────────
+const boardEl  = document.getElementById("board");
 const statusEl = document.getElementById("status");
+const dotEl    = document.getElementById("dot");
+const ddescEl  = document.getElementById("ddesc");
+const movenumEl= document.getElementById("movenum");
 
-let chess = new Chess();
-let session = null;
-let human = "w";
-let selected = null;      // square name currently selected
-let lastMove = null;      // {from,to}
-let busy = false;
+let chess    = new Chess();
+let session  = null;
+let human    = "w";
+let selected = null;
+let lastMove = null;
+let busy     = false;
+let plyCount = 0;
 
-// square name 'e2' -> python-chess square index (a1=0 … h8=63)
-function sqidx(name) { return (name.charCodeAt(1) - 49) * 8 + (name.charCodeAt(0) - 97); }
+// ── Encoding ─────────────────────────────────────────────────────────────────
+function sqidx(sq) {
+  // 'e2' → rank*8 + file   (a1=0 … h8=63)
+  return (sq.charCodeAt(1) - 49) * 8 + (sq.charCodeAt(0) - 97);
+}
 
-// Build the (1,17,8,8) flat float array — MUST mirror src/encoding.board_to_tensor.
 function boardToTensor() {
-  const arr = new Float32Array(17 * 64);
+  const arr   = new Float32Array(17 * 64);
   const files = "abcdefgh";
   for (let rank = 0; rank < 8; rank++) {
     for (let file = 0; file < 8; file++) {
-      const name = files[file] + (rank + 1);
-      const pc = chess.get(name);              // {type,color} or null
+      const pc = chess.get(files[file] + (rank + 1));
       if (pc) {
         const plane = PLANE[pc.type] + (pc.color === "w" ? 0 : 6);
-        arr[plane * 64 + rank * 8 + file] = 1;   // idx = plane*64 + row*8 + col
+        arr[plane * 64 + rank * 8 + file] = 1;
       }
     }
   }
-  if (chess.turn() === "w") arr.fill(1, 12 * 64, 13 * 64);   // side-to-move plane
-  const castle = chess.fen().split(" ")[2];                  // e.g. "KQkq"
-  ["K", "Q", "k", "q"].forEach((c, i) => {
-    if (castle.includes(c)) arr.fill(1, (13 + i) * 64, (14 + i) * 64);
+  if (chess.turn() === "w") arr.fill(1, 12*64, 13*64);
+  const castle = chess.fen().split(" ")[2];
+  ["K","Q","k","q"].forEach((c, i) => {
+    if (castle.includes(c)) arr.fill(1, (13+i)*64, (14+i)*64);
   });
   return arr;
 }
 
-// Run the policy net and return the model's move among legal moves.
-async function engineMove() {
-  const legal = chess.moves({ verbose: true })
-                     .filter(m => !m.promotion || m.promotion === "q");
-  if (legal.length === 0) return null;
-  const input = new ort.Tensor("float32", boardToTensor(), [1, 17, 8, 8]);
-  const out = await session.run({ board: input });
-  const policy = out.policy.data;             // Float32Array(4096)
-  let best = legal[0], bestScore = -Infinity;
-  for (const m of legal) {
-    const score = policy[sqidx(m.from) * 64 + sqidx(m.to)];
-    if (score > bestScore) { bestScore = score; best = m; }
+// ── ONNX inference (returns policy + value) ──────────────────────────────────
+async function infer() {
+  const inp = new ort.Tensor("float32", boardToTensor(), [1, 17, 8, 8]);
+  const out = await session.run({ board: inp });
+  return {
+    policy: out.policy.data,    // Float32Array(4096)
+    value:  out.value.data[0],  // float in [-1,1], side-to-move POV
+  };
+}
+
+function legalQ() {
+  // Legal moves, collapsing all promotions to queen
+  return chess.moves({ verbose:true }).filter(m => !m.promotion || m.promotion === "q");
+}
+
+// ── Negamax with value head ──────────────────────────────────────────────────
+async function negamax(depth, alpha, beta, topK) {
+  if (chess.game_over()) return chess.in_checkmate() ? -1e6 : 0;
+  const { policy, value } = await infer();
+  if (depth <= 0) return value;          // leaf: value head evaluation
+
+  const moves = legalQ();
+  if (!moves.length) return 0;
+
+  // Rank candidates by policy logit, search only top-K
+  const cands = moves
+    .map(m => ({ m, s: policy[sqidx(m.from) * 64 + sqidx(m.to)] }))
+    .sort((a, b) => b.s - a.s)
+    .slice(0, topK);
+
+  let best = -Infinity;
+  for (const { m } of cands) {
+    chess.move({ from: m.from, to: m.to, promotion: "q" });
+    const score = -(await negamax(depth-1, -beta, -alpha, topK));
+    chess.undo();
+    if (score > best)  best  = score;
+    if (best  > alpha) alpha = best;
+    if (alpha >= beta) break;   // alpha-beta cutoff
   }
   return best;
 }
 
-function statusText() {
-  if (chess.game_over()) {
-    if (chess.in_checkmate()) return (chess.turn() === human ? "🏁 You lost — checkmate" : "🏁 You won — checkmate!");
-    return "🏁 Game over — draw";
+// ── Pick engine move ──────────────────────────────────────────────────────────
+async function pickMove() {
+  const moves = legalQ();
+  if (!moves.length) return null;
+
+  const cfg = DIFF[diffIdx];
+  const { policy } = await infer();
+
+  const scored = moves.map(m => ({
+    move: m,
+    logit: policy[sqidx(m.from) * 64 + sqidx(m.to)],
+  }));
+
+  // ── Depth-0: pure policy ─────────────────────────────────────────────────
+  if (cfg.depth === 0) {
+    if (cfg.temp <= 0) {
+      // Greedy
+      return scored.reduce((a, b) => b.logit > a.logit ? b : a).move;
+    }
+    // Temperature sampling over all legal moves
+    const maxL = Math.max(...scored.map(x => x.logit));
+    const w    = scored.map(x => Math.exp((x.logit - maxL) / cfg.temp));
+    const tot  = w.reduce((a, b) => a + b, 0);
+    let r = Math.random() * tot;
+    for (let i = 0; i < scored.length; i++) { r -= w[i]; if (r <= 0) return scored[i].move; }
+    return scored[0].move;
   }
-  const yourTurn = chess.turn() === human;
-  return (yourTurn ? "Your move" : "Engine thinking…") + (chess.in_check() ? "  ⚠️ CHECK" : "");
+
+  // ── Depth > 0: negamax search ─────────────────────────────────────────────
+  const cands = [...scored].sort((a, b) => b.logit - a.logit).slice(0, cfg.topK);
+  let bestMove  = cands[0].move;
+  let bestScore = -Infinity;
+  for (const { move } of cands) {
+    chess.move({ from: move.from, to: move.to, promotion: "q" });
+    const score = -(await negamax(cfg.depth - 1, -Infinity, Infinity, cfg.topK));
+    chess.undo();
+    if (score > bestScore) { bestScore = score; bestMove = move; }
+  }
+  return bestMove;
 }
 
+// ── Status text ───────────────────────────────────────────────────────────────
+function statusText() {
+  if (chess.game_over()) {
+    if (chess.in_checkmate())
+      return chess.turn() === human ? "🏁 You lost — checkmate" : "🎉 You won — checkmate!";
+    if (chess.in_stalemate())             return "½ Draw — stalemate";
+    if (chess.in_threefold_repetition())  return "½ Draw — repetition";
+    if (chess.insufficient_material())    return "½ Draw — insufficient material";
+    return "½ Draw";
+  }
+  const yours = chess.turn() === human;
+  const chk   = chess.in_check() ? "  ⚠️ Check!" : "";
+  if (busy) return `⏳ ${DIFF[diffIdx].label} thinking…${chk}`;
+  return (yours ? "Your move" : "") + chk;
+}
+
+// ── Coordinate labels ─────────────────────────────────────────────────────────
+function updateCoords() {
+  const r = document.getElementById("ranks");
+  const f = document.getElementById("files");
+  const ranks = human === "w" ? "87654321" : "12345678";
+  const files = human === "w" ? "abcdefgh" : "hgfedcba";
+  r.innerHTML = ranks.split("").map(x => `<span>${x}</span>`).join("");
+  f.innerHTML = files.split("").map(x => `<span>${x}</span>`).join("");
+}
+
+// ── Render board ──────────────────────────────────────────────────────────────
 function render() {
   boardEl.innerHTML = "";
-  const ranks = human === "w" ? [7,6,5,4,3,2,1,0] : [0,1,2,3,4,5,6,7];
-  const files = human === "w" ? [0,1,2,3,4,5,6,7] : [7,6,5,4,3,2,1,0];
-  const targets = selected
-    ? chess.moves({ square: selected, verbose: true }).map(m => m.to) : [];
-  const fileCh = "abcdefgh";
-  for (const rank of ranks) {
-    for (const file of files) {
-      const name = fileCh[file] + (rank + 1);
+  const rankOrder = human === "w" ? [7,6,5,4,3,2,1,0] : [0,1,2,3,4,5,6,7];
+  const fileOrder = human === "w" ? [0,1,2,3,4,5,6,7] : [7,6,5,4,3,2,1,0];
+  const fileCh    = "abcdefgh";
+  const targets   = selected
+    ? chess.moves({ square: selected, verbose:true }).map(m => m.to) : [];
+
+  for (const rank of rankOrder) {
+    for (const file of fileOrder) {
+      const sq   = fileCh[file] + (rank + 1);
       const cell = document.createElement("div");
-      cell.className = "sq " + ((rank + file) % 2 ? "light" : "dark");
-      if (name === selected) cell.classList.add("sel");
-      else if (lastMove && (name === lastMove.from || name === lastMove.to)) cell.classList.add("sel");
-      const pc = chess.get(name);
-      if (targets.includes(name)) { cell.classList.add("tgt"); if (pc) cell.classList.add("occupied"); }
-      if (pc) {
-        const s = document.createElement("span");
-        s.textContent = PIECE[pc.type];
-        s.className = pc.color === "w" ? "wp" : "bp";
-        cell.appendChild(s);
+      const lite = (rank + file) % 2 === 1;
+      cell.className = "sq " + (lite ? "light" : "dark");
+
+      // Highlight: selection and last-move
+      if (sq === selected) {
+        cell.classList.add("sel");
+      } else if (lastMove && (sq === lastMove.from || sq === lastMove.to)) {
+        cell.classList.add("last");
       }
-      cell.onclick = () => onClick(name);
+
+      const pc = chess.get(sq);
+      if (targets.includes(sq)) {
+        cell.classList.add("tgt");
+        if (pc) cell.classList.add("occ");
+      }
+
+      if (pc) {
+        const span = document.createElement("span");
+        if (pc.color === "w") {
+          span.className   = "pw";
+          span.textContent = PIECE_W[pc.type];   // ♙♘♗♖♕♔ (outline/hollow)
+        } else {
+          span.className   = "pb";
+          span.textContent = PIECE_B[pc.type];   // ♟♞♝♜♛♚ (filled/solid)
+        }
+        cell.appendChild(span);
+      }
+
+      cell.onclick = () => onClick(sq);
       boardEl.appendChild(cell);
     }
   }
+
   statusEl.textContent = statusText();
+  dotEl.classList.toggle("on", busy);
+  movenumEl.textContent = plyCount > 0
+    ? `Move ${Math.ceil(plyCount / 2)}  (${plyCount} ply)` : "";
 }
 
-async function onClick(name) {
+// ── Click handler ─────────────────────────────────────────────────────────────
+async function onClick(sq) {
   if (busy || chess.game_over() || chess.turn() !== human) return;
-  const pc = chess.get(name);
+  const pc = chess.get(sq);
+
   if (selected === null) {
-    if (pc && pc.color === human) { selected = name; render(); }
+    if (pc && pc.color === human) { selected = sq; render(); }
     return;
   }
-  const legal = chess.moves({ square: selected, verbose: true });
-  const chosen = legal.find(m => m.to === name);
+
+  const legal  = chess.moves({ square: selected, verbose:true });
+  const chosen = legal.find(m => m.to === sq);
+
   if (chosen) {
-    chess.move({ from: selected, to: name, promotion: "q" });
-    lastMove = { from: selected, to: name };
+    chess.move({ from: selected, to: sq, promotion: "q" });
+    lastMove = { from: selected, to: sq };
+    plyCount++;
     selected = null;
     render();
     await engineReply();
   } else {
-    selected = (pc && pc.color === human) ? name : null;
+    selected = (pc && pc.color === human) ? sq : null;
     render();
   }
 }
 
+// ── Engine reply ──────────────────────────────────────────────────────────────
 async function engineReply() {
   if (chess.game_over() || chess.turn() === human) return;
-  busy = true; statusEl.textContent = "Engine thinking…";
-  await new Promise(r => setTimeout(r, 30));      // let the UI paint
-  const m = await engineMove();
-  if (m) { chess.move({ from: m.from, to: m.to, promotion: "q" }); lastMove = { from: m.from, to: m.to }; }
+  busy = true;
+  render();
+  await new Promise(r => setTimeout(r, 40));  // let UI repaint first
+  const m = await pickMove();
+  if (m) {
+    chess.move({ from: m.from, to: m.to, promotion: "q" });
+    lastMove = { from: m.from, to: m.to };
+    plyCount++;
+  }
   busy = false;
   render();
 }
 
+// ── New game ──────────────────────────────────────────────────────────────────
 async function newGame() {
-  chess = new Chess();
-  selected = null; lastMove = null;
-  human = document.getElementById("color").value;
+  chess    = new Chess();
+  selected = null; lastMove = null; plyCount = 0; busy = false;
+  updateCoords();
   render();
-  if (chess.turn() !== human) await engineReply();   // engine (White) opens
+  if (chess.turn() !== human) await engineReply();
 }
 
-document.getElementById("new").onclick = newGame;
-document.getElementById("color").onchange = newGame;
+// ── UI event wiring ───────────────────────────────────────────────────────────
+document.querySelectorAll("[data-color]").forEach(btn => {
+  btn.onclick = () => {
+    if (btn.dataset.color === human) return;
+    human = btn.dataset.color;
+    document.querySelectorAll("[data-color]").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    newGame();
+  };
+});
 
-// ---- Boot: load the model, then run a golden self-test in the console --------
-const GOLDEN = [
-  {"fen":"rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1","top":"__"},
-  {"fen":"r1bqk2r/pppp1ppp/2n2n2/2b1p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4","top":"__"}
-];
-async function selfTest() {
-  // Encoding sanity that never depends on the weights: start position plane-sum = 352.
-  chess = new Chess();
-  const s = boardToTensor().reduce((a, b) => a + b, 0);
-  console.log("[self-test] start-position plane sum =", s, s === 352 ? "OK (expected 352)" : "MISMATCH!");
-  chess = new Chess();
-}
+document.querySelectorAll(".diff-tog").forEach(btn => {
+  btn.onclick = () => {
+    diffIdx = +btn.dataset.d;
+    document.querySelectorAll(".diff-tog").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    ddescEl.textContent = DIFF[diffIdx].desc;
+  };
+});
 
+document.getElementById("btn-new").onclick = newGame;
+
+// ── Boot: load ONNX model ─────────────────────────────────────────────────────
 (async () => {
   try {
     session = await ort.InferenceSession.create("chess_expert.onnx",
                 { executionProviders: ["wasm"] });
-    await selfTest();
+
+    // Quick encoding sanity check (start-position plane sum must be 352)
+    const s = boardToTensor().reduce((a, b) => a + b, 0);
+    console.assert(s === 352, "[chess-expert] encoding sanity FAILED, expected 352 got", s);
+    console.log("[chess-expert] model loaded ✓  encoding sum =", s);
+
     document.getElementById("loading")?.remove();
     await newGame();
   } catch (e) {
-    statusEl.innerHTML = "<span style='color:#e57373'>Failed to load model: " + e + "</span>";
+    statusEl.innerHTML = `<span style="color:#e57373">❌ Failed to load model: ${e}</span>`;
     console.error(e);
   }
 })();
