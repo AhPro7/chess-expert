@@ -163,35 +163,38 @@ def play(checkpoint: str = "models/chess_expert.pt", human_white: bool = True,
                 state["selected"] = None  # deselect
         render()
 
-    # Build the 8x8 grid of buttons, with rank/file coordinate labels.
-    def coord(text):
+    # Board sizing — tweak SQ to taste.
+    SQ = 72          # square size in px
+    LABEL = 26       # coordinate-gutter size in px
+
+    def coord(text, w, h):
         return widgets.HTML(
-            f"<div class='ce-coord' style='width:24px;height:56px;display:flex;"
+            f"<div class='ce-coord' style='width:{w}px;height:{h}px;display:flex;"
             f"align-items:center;justify-content:center'>{text}</div>"
         )
 
     grid_rows = []
     for r in ranks:
-        row = [coord(str(r + 1))]  # rank number on the left
+        row = [coord(str(r + 1), LABEL, SQ)]  # rank number on the left
         for f in files:
             sq = chess.square(f, r)
             btn = widgets.Button(
                 description="",
                 layout=widgets.Layout(
-                    width="56px", height="56px", padding="0px", margin="0px"
+                    width=f"{SQ}px", height=f"{SQ}px", padding="0px", margin="0px"
                 ),
             )
             btn.add_class("ce-sq")
-            btn.style.font_size = "38px"
+            btn.style.font_size = f"{int(SQ * 0.72)}px"
             btn.on_click(lambda b, s=sq: on_click(s))
             buttons[sq] = btn
             row.append(btn)
         grid_rows.append(widgets.HBox(row, layout=widgets.Layout(margin="0px")))
 
-    # File letters (a–h) under the board, aligned with the columns.
+    # File letters (a–h) under the board, aligned with the columns (width = SQ).
     file_letters = "abcdefgh" if human_white else "hgfedcba"
     file_row = widgets.HBox(
-        [coord("")] + [coord(c) for c in file_letters],
+        [coord("", LABEL, LABEL)] + [coord(c, SQ, LABEL) for c in file_letters],
         layout=widgets.Layout(margin="0px"),
     )
     board_box = widgets.VBox(grid_rows + [file_row], layout=widgets.Layout(margin="0px"))
