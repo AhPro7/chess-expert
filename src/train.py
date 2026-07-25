@@ -75,13 +75,40 @@ def train(args: argparse.Namespace) -> None:
     train_n = train_idx.shape[0]
     print(f"Train: {train_n}  Val: {val_n}  ({pos_t.nbytes / 1e9:.1f} GB in RAM)")
 
-    model = ChessPolicyNet(channels=args.channels, num_blocks=args.blocks).to(device)
+    # If resuming, build the model from the checkpoint's own config so the
+    # architecture always matches the saved weights.
+    resume_ck = torch.load(args.resume, map_location=device) if args.resume else None
+    cfg = (
+        resume_ck["config"] if resume_ck
+        else {"channels": args.channels, "num_blocks": args.blocks}
+    )
+    model = ChessPolicyNet(**cfg).to(device)
     if use_cuda and args.channels_last:
         model = model.to(memory_format=torch.channels_last)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     criterion = nn.CrossEntropyLoss()
     n_params = sum(p.numel() for p in model.parameters())
-    print(f"Model: {args.channels}ch x {args.blocks} blocks — {n_params:,} params")
+    print(f"Model: {cfg['channels']}ch x {cfg['num_blocks']} blocks — {n_params:,} params")
+
+    # Resume: restore weights, optimizer state, and the epoch counter.
+    start_epoch = 1
+    if resume_ck is not None:
+        model.load_state_dict(resume_ck["state_dict"])
+        if "optimizer" in resume_ck:
+            optimizer.load_state_dict(resume_ck["optimizer"])
+            start_epoch = resume_ck.get("epoch", 0) + 1
+            print(f"Resumed from {args.resume}: continuing at epoch {start_epoch}")
+        else:
+            print(f"Resumed WEIGHTS from {args.resume} (no optimizer/epoch in file — "
+                  "fresh optimizer, starting at epoch 1)")
+    if start_epoch > args.epochs:
+        print(f"Nothing to do: start epoch {start_epoch} > --epochs {args.epochs}. "
+              "Raise --epochs to train further.")
+        return
+
+    # Sidecar file holding optimizer + epoch for --resume (ends in .pt so it is
+    # git-ignored; the small deployable checkpoint stays at --out).
+    resume_path = os.path.splitext(args.out)[0] + ".resume.pt"
 
     bs = args.batch_size
     total_batches = (train_n + bs - 1) // bs
@@ -103,7 +130,7 @@ def train(args: argparse.Namespace) -> None:
             torch.zeros((), device=device, dtype=torch.long),  # correct
         )
 
-    for epoch in range(1, args.epochs + 1):
+    for epoch in range(start_epoch, args.epochs + 1):
         model.train()
         start = time.time()
         last_log = start
@@ -175,15 +202,31 @@ def train(args: argparse.Namespace) -> None:
 
         # Checkpoint every epoch so a disconnect never loses a full run.
         os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
+        # Small deployable checkpoint (what play.py / the GUI load).
         torch.save({"state_dict": model.state_dict(), "config": model.config}, args.out)
+        # Larger sidecar with optimizer + epoch, for `--resume`.
+        torch.save(
+            {
+                "state_dict": model.state_dict(),
+                "optimizer": optimizer.state_dict(),
+                "epoch": epoch,
+                "config": model.config,
+            },
+            resume_path,
+        )
 
-    print(f"Saved checkpoint -> {args.out}")
+    print(f"Saved checkpoint -> {args.out}  (resume state -> {resume_path})")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train ChessPolicyNet")
     parser.add_argument("--data", required=True, help="samples dir from src.data")
     parser.add_argument("--out", default="models/chess_expert.pt")
+    parser.add_argument(
+        "--resume", default="",
+        help="Path to a *.resume.pt file to continue training from "
+             "(e.g. models/chess_expert.resume.pt). --epochs is the TOTAL target.",
+    )
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--batch-size", type=int, default=4096)
     parser.add_argument("--lr", type=float, default=1e-3)

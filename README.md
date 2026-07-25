@@ -86,8 +86,13 @@ python -m src.data --pgn data/gm_games.pgn --out data/samples --min-elo 0
 
 # 3. Train (GPU strongly recommended)
 python -m src.train --data data/samples --out models/chess_expert.pt \
-    --epochs 30 --batch-size 1024
+    --epochs 20 --batch-size 4096
 ```
+
+**Speed:** TF32 + cuDNN autotune are always on for CUDA; on Ampere+ (L4/A100) add
+`--amp on` for bf16 mixed precision. **Resume** a stopped run with
+`--resume models/chess_expert.resume.pt` (a sidecar written every epoch);
+`--epochs` is the total target.
 
 ---
 
