@@ -92,6 +92,7 @@
   #board {
     display: grid;
     grid-template-columns: repeat(8, 1fr);
+    grid-template-rows: repeat(8, 1fr);   /* ← equal rows — fixes squashed empty ranks */
     width: min(90vw, 480px);
     aspect-ratio: 1 / 1;
     border: 2px solid #111;
@@ -99,7 +100,6 @@
     overflow: hidden;
     box-shadow: 0 10px 40px rgba(0,0,0,0.6);
     user-select: none;
-    /* no gap — squares must be perfectly adjacent */
   }
 
   /* ── Individual square ── */
