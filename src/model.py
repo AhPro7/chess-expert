@@ -32,9 +32,15 @@ class ResidualBlock(nn.Module):
 
 
 class ChessPolicyNet(nn.Module):
-    """ResNet policy. Defaults (128 channels, 10 blocks, ~4-5M params) are the
-    sweet spot: strong enough when trained on lots of GM data, yet one forward
-    pass takes ~0.1-0.3s on CPU, so inference stays snappy."""
+    """ResNet with a policy head (which move) and a value head (how good is this
+    position for the side to move). Defaults (128 channels, 10 blocks) take one
+    forward pass in ~0.1-0.3s on CPU.
+
+    forward() returns (policy_logits[B, 4096], value[B]) where value is in
+    [-1, 1] from the perspective of the side to move (+1 = side to move is
+    winning, -1 = losing). The value head is what lets the engine *search* — look
+    a couple of moves ahead and avoid hanging pieces.
+    """
 
     def __init__(self, channels: int = 128, num_blocks: int = 10):
         super().__init__()
@@ -51,12 +57,23 @@ class ChessPolicyNet(nn.Module):
         self.policy_bn = nn.BatchNorm2d(2)
         self.policy_fc = nn.Linear(2 * 8 * 8, ACTION_SIZE)
 
+        # Value head: 1 plane -> small MLP -> scalar in [-1, 1] (tanh).
+        self.value_conv = nn.Conv2d(channels, 1, 1, bias=False)
+        self.value_bn = nn.BatchNorm2d(1)
+        self.value_fc1 = nn.Linear(8 * 8, 64)
+        self.value_fc2 = nn.Linear(64, 1)
+
         # Remember the hyper-parameters so checkpoints are self-describing.
         self.config = {"channels": channels, "num_blocks": num_blocks}
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor):
         x = self.stem(x)
         x = self.blocks(x)
+
         p = F.relu(self.policy_bn(self.policy_conv(x)))
-        p = p.flatten(start_dim=1)
-        return self.policy_fc(p)
+        p = self.policy_fc(p.flatten(start_dim=1))
+
+        v = F.relu(self.value_bn(self.value_conv(x)))
+        v = F.relu(self.value_fc1(v.flatten(start_dim=1)))
+        v = torch.tanh(self.value_fc2(v)).squeeze(-1)  # (B,)
+        return p, v

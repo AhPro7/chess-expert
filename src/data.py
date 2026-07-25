@@ -50,15 +50,22 @@ def pgn_to_samples(
     pgn_paths: list[str],
     min_elo: int = 0,
     max_games: int | None = None,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Parse PGN file(s) into (positions, moves) numpy arrays.
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Parse PGN file(s) into (positions, moves, values) numpy arrays.
 
     Returns:
         positions: (N, 17, 8, 8) uint8
-        moves:     (N,) int16   (move index in [0, 4095])
+        moves:     (N,) int16    (move index in [0, 4095])
+        values:    (N,) int8     game outcome from the SIDE-TO-MOVE's POV:
+                   +1 if the side to move eventually won, -1 if it lost, 0 draw.
+
+    Games with an unfinished result ("*") are skipped (no valid value target).
     """
+    _RESULT = {"1-0": 1, "0-1": -1, "1/2-1/2": 0}  # from White's POV
+
     positions: list[np.ndarray] = []
     moves: list[int] = []
+    values: list[int] = []
     games_used = 0
 
     for path in pgn_paths:
@@ -71,12 +78,17 @@ def pgn_to_samples(
                     break  # end of this file
                 if not _game_passes_filter(game.headers, min_elo):
                     continue
+                white_pov = _RESULT.get(game.headers.get("Result", "*"))
+                if white_pov is None:
+                    continue  # skip unfinished/unknown results
 
                 board = game.board()
                 for move in game.mainline_moves():
                     # Store as uint8 right away to keep peak memory low.
                     positions.append(board_to_tensor(board).astype(np.uint8))
                     moves.append(move_to_index(move))
+                    # Value from the perspective of the side to move.
+                    values.append(white_pov if board.turn == chess.WHITE else -white_pov)
                     board.push(move)
 
                 games_used += 1
@@ -94,6 +106,7 @@ def pgn_to_samples(
     return (
         np.asarray(positions, dtype=np.uint8),
         np.asarray(moves, dtype=np.int16),
+        np.asarray(values, dtype=np.int8),
     )
 
 
@@ -149,13 +162,17 @@ def main() -> None:
         paths = sorted(glob.glob(args.pgn)) or [args.pgn]
     print(f"Reading {len(paths)} PGN file(s): {paths}")
 
-    positions, moves = pgn_to_samples(paths, args.min_elo, args.max_games)
+    positions, moves, values = pgn_to_samples(paths, args.min_elo, args.max_games)
 
     os.makedirs(args.out, exist_ok=True)
     np.save(os.path.join(args.out, "positions.npy"), positions)
     np.save(os.path.join(args.out, "moves.npy"), moves)
+    np.save(os.path.join(args.out, "values.npy"), values)
     size_gb = positions.nbytes / 1e9
+    win = int((values == 1).sum()); loss = int((values == -1).sum())
+    draw = int((values == 0).sum())
     print(f"Saved {len(moves):,} samples -> {args.out}/ ({size_gb:.2f} GB uint8)")
+    print(f"  value targets — win: {win:,}  loss: {loss:,}  draw: {draw:,}")
 
 
 if __name__ == "__main__":

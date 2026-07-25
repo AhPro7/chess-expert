@@ -53,10 +53,12 @@ def test_move_index_round_trip():
         assert index_to_move(move_to_index(move), board) == move
 
 
-def test_model_forward_shape():
+def test_model_forward_shapes():
     net = ChessPolicyNet()
-    out = net(torch.zeros(2, NUM_PLANES, 8, 8))
-    assert out.shape == (2, ACTION_SIZE)
+    policy, value = net(torch.zeros(2, NUM_PLANES, 8, 8))
+    assert policy.shape == (2, ACTION_SIZE)
+    assert value.shape == (2,)
+    assert (value.abs() <= 1).all()  # tanh range
 
 
 def test_full_game_is_always_legal():

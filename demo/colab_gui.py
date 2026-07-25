@@ -74,12 +74,14 @@ def resolve_move(board: chess.Board, from_square: int, to_square: int) -> chess.
 # ---- Widget layer --------------------------------------------------------
 
 def play(checkpoint: str = "models/chess_expert.pt", human_white: bool = True,
-         temperature: float = 0.5, top_k: int = 5, square_size: int = 72):
+         temperature: float = 0.5, top_k: int = 5, depth: int = 2,
+         square_size: int = 72):
     """Launch the clickable board.
 
-    temperature>0 + top_k make the engine non-deterministic: it samples among its
-    top_k best moves (so games differ each time without it blundering). Set
-    temperature=0 for identical, always-best play. square_size sets board size px.
+    depth>0 makes the engine look ahead with the value head (needs a value-trained
+    checkpoint; older policy-only checkpoints automatically fall back to policy).
+    This is what stops it hanging pieces. temperature>0 + top_k keep it
+    non-deterministic. square_size sets the board size in px.
     """
     import ipywidgets as widgets
     from IPython.display import HTML, display
@@ -148,7 +150,9 @@ def play(checkpoint: str = "models/chess_expert.pt", human_white: bool = True,
 
     def engine_reply():
         if board.turn != human_color and not board.is_game_over(claim_draw=True):
-            move = engine.select_move(board, temperature=temperature, top_k=top_k)
+            move = engine.select_move(
+                board, temperature=temperature, top_k=top_k, depth=depth
+            )
             if move is not None:
                 board.push(move)
                 state["last_move"] = move

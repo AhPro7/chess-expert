@@ -21,9 +21,9 @@ project**, not a claim to beat Stockfish.
 |------|--------------|
 | **Encode** | Each board → a `17 × 8 × 8` tensor: 12 piece planes (6 types × 2 colors), 1 side-to-move plane, 4 castling-rights planes. No board-flipping. |
 | **Move encoding** | Every move → an integer `from×64 + to` (4096 classes). Promotions default to queen. |
-| **Model** | A residual CNN — **128 channels × 10 residual blocks** (~4–5M params) → 4096 move logits. Policy-only. |
-| **Train** | Cross-entropy against the move the grandmaster actually played. Metric: *move-match accuracy*. |
-| **Play** | Run the net, **mask to legal moves**, pick the best. The model can *never* output an illegal move. |
+| **Model** | A residual CNN — **128 channels × 10 residual blocks** — with two heads: a **policy** (4096 move logits) and a **value** (how good the position is for the side to move, in −1…1). |
+| **Train** | Policy: cross-entropy vs. the grandmaster's move. Value: MSE vs. the game outcome. Metrics: *move-match accuracy* + *value MAE*. |
+| **Play** | **Mask to legal moves** (never illegal). Optionally **look ahead** with a shallow, policy-guided negamax that scores leaf positions with the value head — so it avoids hanging pieces. |
 
 Training happens on a **Colab GPU**. Inference runs **on CPU** — one forward pass per
 move (~0.1–0.3s), no GPU needed to play.
@@ -117,13 +117,28 @@ scripts/
 
 ---
 
+## Thinking ahead (value head + search)
+
+The policy alone just imitates grandmaster moves — it has no notion of the future,
+so it sometimes hangs a piece. To fix that the model also has a **value head**
+(trained on game outcomes) and the engine can do a **shallow, policy-guided
+negamax search**: for each candidate move it looks a couple of plies ahead and
+scores the resulting position with the value head, so *"if I move here, my
+opponent grabs my queen"* gets caught. Enable it with `depth`:
+
+```python
+engine.select_move(board, depth=2)   # look 2 plies ahead (needs a value-trained model)
+```
+
+The GUI turns this on by default. Older policy-only checkpoints automatically fall
+back to plain policy play.
+
 ## Honest limitations
 
-- **No search** → occasional tactical blunders. It knows what a GM *usually* plays,
-  not how to calculate a 5-move combination.
-- **Style, not strength** → it imitates the *distribution* of grandmaster moves.
-- **v2 idea:** add a value head + a shallow search (alpha-beta / MCTS) to turn the
-  imitator into an engine that actively *outplays* opponents.
+- **Shallow search** → catches immediate tactics, not deep 5-move combinations.
+- **Style first** → it still imitates the *distribution* of grandmaster moves; the
+  search just keeps it from obvious blunders.
+- **v2 idea:** deeper search / MCTS, or a transformer with engine-distilled values.
   <img width="480" height="480" alt="self_play" src="https://github.com/user-attachments/assets/b4578c68-ef25-4c60-8cfb-2bba18ea8536" />
 
 

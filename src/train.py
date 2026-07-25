@@ -66,6 +66,18 @@ def train(args: argparse.Namespace) -> None:
     mv_t = torch.from_numpy(moves.astype(np.int64))                 # long,  CPU
     N = mv_t.shape[0]
 
+    # Value targets (side-to-move POV) enable the value head + search. Older
+    # sample dirs may not have them — then we train policy-only.
+    values_path = os.path.join(args.data, "values.npy")
+    has_values = os.path.exists(values_path)
+    if has_values:
+        val_t = torch.from_numpy(np.load(values_path).astype(np.float32))
+        print("Value targets found — training policy + value head.")
+    else:
+        val_t = torch.zeros(N, dtype=torch.float32)
+        print("No values.npy — training policy only (re-run src.data for value "
+              "targets to enable search).")
+
     # Fixed, seeded train/val split by index (positions of the SAME game may land
     # in both — fine for a portfolio model; val accuracy reads slightly optimistic).
     perm = torch.randperm(N, generator=torch.Generator().manual_seed(42))
@@ -86,7 +98,9 @@ def train(args: argparse.Namespace) -> None:
     if use_cuda and args.channels_last:
         model = model.to(memory_format=torch.channels_last)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
-    criterion = nn.CrossEntropyLoss()
+    policy_criterion = nn.CrossEntropyLoss()
+    value_criterion = nn.MSELoss()
+    value_weight = args.value_weight if has_values else 0.0
     n_params = sum(p.numel() for p in model.parameters())
     print(f"Model: {cfg['channels']}ch x {cfg['num_blocks']} blocks — {n_params:,} params")
 
@@ -114,12 +128,13 @@ def train(args: argparse.Namespace) -> None:
     total_batches = (train_n + bs - 1) // bs
 
     def fetch(idx: torch.Tensor):
-        """Gather a batch: uint8 CPU -> device -> float; labels -> device."""
+        """Gather a batch: uint8 CPU -> device -> float; move + value labels."""
         xb = pos_t.index_select(0, idx).to(device, non_blocking=True).float()
         yb = mv_t.index_select(0, idx).to(device, non_blocking=True)
+        vb = val_t.index_select(0, idx).to(device, non_blocking=True)
         if use_cuda and args.channels_last:
             xb = xb.to(memory_format=torch.channels_last)
-        return xb, yb
+        return xb, yb, vb
 
     # Accumulate stats as GPU tensors and only .item() them at log time. Calling
     # .item() every batch forces a GPU->CPU sync that stalls the whole pipeline;
@@ -141,12 +156,14 @@ def train(args: argparse.Namespace) -> None:
         epoch_order = train_idx[torch.randperm(train_n)]  # reshuffle each epoch
         for i in range(1, total_batches + 1):
             batch_idx = epoch_order[(i - 1) * bs : i * bs]
-            xb, yb = fetch(batch_idx)
+            xb, yb, vb = fetch(batch_idx)
 
             optimizer.zero_grad(set_to_none=True)
             with torch.autocast(device_type="cuda", dtype=amp_dtype, enabled=use_amp):
-                logits = model(xb)
-                loss = criterion(logits, yb)
+                logits, value = model(xb)
+                loss = policy_criterion(logits, yb)
+                if value_weight:
+                    loss = loss + value_weight * value_criterion(value, vb)
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
@@ -182,28 +199,40 @@ def train(args: argparse.Namespace) -> None:
         # ---- Validation ----
         model.eval()
         val_correct = torch.zeros((), device=device, dtype=torch.long)
+        val_verr = torch.zeros((), device=device)  # value abs error sum
         val_seen = 0
         with torch.no_grad():
             for start_j in range(0, val_n, bs):
                 batch_idx = val_idx[start_j : start_j + bs]
-                xb, yb = fetch(batch_idx)
+                xb, yb, vb = fetch(batch_idx)
                 with torch.autocast(device_type="cuda", dtype=amp_dtype, enabled=use_amp):
-                    logits = model(xb)
+                    logits, value = model(xb)
                 val_correct += (logits.argmax(dim=1) == yb).sum()
+                val_verr += (value.float() - vb).abs().sum()
                 val_seen += yb.size(0)
         val_acc = (val_correct.float() / val_seen).item()
+        val_mae = (val_verr / val_seen).item()
 
+        value_note = f" | val value-MAE {val_mae:.3f}" if value_weight else ""
         print(
             f"Epoch {epoch:2d}/{args.epochs} DONE | "
-            f"train loss {train_loss:.3f} | val move-match {val_acc:.1%} | "
-            f"{time.time() - start:.0f}s\n",
+            f"train loss {train_loss:.3f} | val move-match {val_acc:.1%}"
+            f"{value_note} | {time.time() - start:.0f}s\n",
             flush=True,
         )
 
         # Checkpoint every epoch so a disconnect never loses a full run.
         os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
-        # Small deployable checkpoint (what play.py / the GUI load).
-        torch.save({"state_dict": model.state_dict(), "config": model.config}, args.out)
+        # Small deployable checkpoint (what play.py / the GUI load). The
+        # value_trained flag tells the engine whether search can be trusted.
+        torch.save(
+            {
+                "state_dict": model.state_dict(),
+                "config": model.config,
+                "value_trained": bool(value_weight),
+            },
+            args.out,
+        )
         # Larger sidecar with optimizer + epoch, for `--resume`.
         torch.save(
             {
@@ -211,6 +240,7 @@ def train(args: argparse.Namespace) -> None:
                 "optimizer": optimizer.state_dict(),
                 "epoch": epoch,
                 "config": model.config,
+                "value_trained": bool(value_weight),
             },
             resume_path,
         )
@@ -233,6 +263,10 @@ def main() -> None:
     parser.add_argument("--channels", type=int, default=128)
     parser.add_argument("--blocks", type=int, default=10)
     parser.add_argument("--val-split", type=float, default=0.05)
+    parser.add_argument(
+        "--value-weight", type=float, default=1.0,
+        help="Weight of the value-head MSE loss (0 = policy only)",
+    )
     parser.add_argument(
         "--amp", choices=["on", "off"], default="off",
         help="Mixed-precision autocast. Off by default (it hangs/errs on some "
