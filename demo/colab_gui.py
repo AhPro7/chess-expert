@@ -74,14 +74,25 @@ def resolve_move(board: chess.Board, from_square: int, to_square: int) -> chess.
 # ---- Widget layer --------------------------------------------------------
 
 def play(checkpoint: str = "models/chess_expert.pt", human_white: bool = True,
-         temperature: float = 0.0):
-    """Launch the clickable board. temperature>0 adds variety to engine moves."""
+         temperature: float = 0.0, square_size: int = 72):
+    """Launch the clickable board.
+
+    temperature>0 adds variety to engine moves; square_size sets the board size
+    in pixels (pieces scale with it).
+    """
     import ipywidgets as widgets
     from IPython.display import HTML, display
 
     from src.play import ChessEngine
 
-    display(HTML(_CSS))  # inject styling once
+    SQ = int(square_size)
+    LABEL = max(18, SQ // 3)
+    display(HTML(_CSS))  # base styling
+    # Force the piece glyph size (Jupyter's default button CSS otherwise wins).
+    display(HTML(
+        f"<style>.ce-sq{{font-size:{int(SQ * 0.86)}px !important;"
+        f"line-height:1 !important;padding:0 !important;}}</style>"
+    ))
 
     engine = ChessEngine(checkpoint)
     board = chess.Board()
@@ -163,10 +174,6 @@ def play(checkpoint: str = "models/chess_expert.pt", human_white: bool = True,
                 state["selected"] = None  # deselect
         render()
 
-    # Board sizing — tweak SQ to taste.
-    SQ = 72          # square size in px
-    LABEL = 26       # coordinate-gutter size in px
-
     def coord(text, w, h):
         return widgets.HTML(
             f"<div class='ce-coord' style='width:{w}px;height:{h}px;display:flex;"
@@ -185,7 +192,6 @@ def play(checkpoint: str = "models/chess_expert.pt", human_white: bool = True,
                 ),
             )
             btn.add_class("ce-sq")
-            btn.style.font_size = f"{int(SQ * 0.72)}px"
             btn.on_click(lambda b, s=sq: on_click(s))
             buttons[sq] = btn
             row.append(btn)
