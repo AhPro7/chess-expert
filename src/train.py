@@ -53,12 +53,16 @@ def train(args: argparse.Namespace) -> None:
     criterion = nn.CrossEntropyLoss()
     n_params = sum(p.numel() for p in model.parameters())
     print(f"Model: {args.channels}ch x {args.blocks} blocks — {n_params:,} params")
+    total_batches = len(train_loader)
 
     for epoch in range(1, args.epochs + 1):
         model.train()
         start = time.time()
+        last_log = start
         running_loss = 0.0
-        for positions, moves in train_loader:
+        # Rolling stats for the live per-batch log (reset every log interval).
+        win_loss, win_correct, win_seen = 0.0, 0, 0
+        for i, (positions, moves) in enumerate(train_loader, start=1):
             positions = positions.to(device)
             moves = moves.to(device, dtype=torch.long)
 
@@ -67,7 +71,27 @@ def train(args: argparse.Namespace) -> None:
             loss = criterion(logits, moves)
             loss.backward()
             optimizer.step()
-            running_loss += loss.item() * positions.size(0)
+
+            bs = positions.size(0)
+            running_loss += loss.item() * bs
+            win_loss += loss.item() * bs
+            win_correct += (logits.argmax(dim=1) == moves).sum().item()
+            win_seen += bs
+
+            if i % args.log_interval == 0 or i == total_batches:
+                now = time.time()
+                pos_per_s = win_seen / max(now - last_log, 1e-9)  # window throughput
+                pct = i / total_batches
+                eta = (now - start) / pct - (now - start)  # rest of this epoch
+                print(
+                    f"  epoch {epoch:2d} | batch {i:>5d}/{total_batches} "
+                    f"({pct:4.0%}) | loss {win_loss / win_seen:.3f} | "
+                    f"move-match {win_correct / win_seen:5.1%} | "
+                    f"{pos_per_s:.0f} pos/s | epoch ETA {eta / 60:4.1f}m",
+                    flush=True,
+                )
+                last_log = now
+                win_loss, win_correct, win_seen = 0.0, 0, 0
 
         train_loss = running_loss / train_size
 
@@ -84,9 +108,10 @@ def train(args: argparse.Namespace) -> None:
         val_acc /= val_seen
 
         print(
-            f"Epoch {epoch:2d}/{args.epochs} | "
-            f"loss {train_loss:.3f} | val move-match {val_acc:.1%} | "
-            f"{time.time() - start:.0f}s"
+            f"Epoch {epoch:2d}/{args.epochs} DONE | "
+            f"train loss {train_loss:.3f} | val move-match {val_acc:.1%} | "
+            f"{time.time() - start:.0f}s\n",
+            flush=True,
         )
 
     torch.save(
@@ -107,6 +132,12 @@ def main() -> None:
     parser.add_argument("--blocks", type=int, default=10)
     parser.add_argument("--val-split", type=float, default=0.05)
     parser.add_argument("--workers", type=int, default=0)
+    parser.add_argument(
+        "--log-interval",
+        type=int,
+        default=50,
+        help="Print live train loss/accuracy every N batches",
+    )
     parser.add_argument("--device", default="", help="cuda / cpu (auto if empty)")
     train(parser.parse_args())
 
