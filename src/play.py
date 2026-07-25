@@ -49,25 +49,41 @@ class ChessEngine:
         return dict(zip(legal, probs))
 
     def select_move(
-        self, board: chess.Board, temperature: float = 0.0
+        self,
+        board: chess.Board,
+        temperature: float = 0.0,
+        top_k: int | None = None,
     ) -> chess.Move | None:
         """Choose a legal move.
 
-        temperature == 0 -> greedy (argmax). > 0 -> sample, higher = more random
-        (adds variety to demos so games aren't identical every time).
+        temperature == 0 -> greedy (argmax), always the model's top move (so it
+            plays the same game every time).
+        temperature  > 0 -> sample; higher = more random / varied.
+        top_k        -> restrict sampling to the k most likely moves, so the
+            engine varies among *good* moves without ever picking a bad one.
         """
         probs = self.move_probabilities(board)
         if not probs:
             return None
 
         moves = list(probs.keys())
-        weights = np.array(list(probs.values()))
+        weights = np.array(list(probs.values()), dtype=np.float64)
 
         if temperature <= 0:
             return moves[int(weights.argmax())]
 
+        # Keep only the top_k most probable moves (zero out the rest).
+        if top_k is not None and 0 < top_k < len(moves):
+            keep = np.argsort(weights)[-top_k:]
+            mask = np.zeros_like(weights)
+            mask[keep] = 1.0
+            weights = weights * mask
+
         scaled = weights ** (1.0 / temperature)
-        scaled /= scaled.sum()
+        total = scaled.sum()
+        if total <= 0 or not np.isfinite(total):  # numerical guard
+            return moves[int(weights.argmax())]
+        scaled /= total
         return moves[int(np.random.choice(len(moves), p=scaled))]
 
 
