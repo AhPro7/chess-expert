@@ -1,0 +1,18 @@
+# Data (large) — download / regenerate locally
+data/*.pgn
+data/*.zip
+data/*.npz
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+
+# Keep the shipped demo checkpoint (small) tracked; ignore ad-hoc ones.
+models/*.pt
+!models/chess_expert.pt

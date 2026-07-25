@@ -1,0 +1,8 @@
+# Core
+python-chess>=1.11
+numpy>=1.24
+torch>=2.0
+
+# Demo / visualization (CPU only)
+matplotlib>=3.7
+pillow>=10.0
