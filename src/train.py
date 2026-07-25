@@ -4,11 +4,10 @@ Fast path for GPUs (falls back cleanly to CPU):
   * The whole uint8 dataset is loaded into RAM and batched with a manual loop —
     no per-sample Python overhead, and uint8->float casting happens vectorized
     on the GPU.
-  * Mixed precision (AMP, bf16 on Ampere+ else fp16) + TF32 use the GPU's tensor
-    cores. This is usually the biggest speedup (often 3-8x). Disable with
-    `--amp off` to fall back to the known-good fp32 path.
-  * cuDNN autotune (`benchmark`) picks the fastest conv kernels for the fixed
-    8x8 input size.
+  * TF32 matmuls/convs + cuDNN autotune (`benchmark`) are always on for CUDA —
+    a solid, rock-stable speedup on Ampere+ (A100/L4) with no numerical risk.
+  * Mixed-precision autocast (AMP) is OPT-IN via `--amp on`. It can add another
+    speedup on some GPUs, but it hangs/errors on others, so it defaults to off.
 
 Usage:
     python -m src.train --data data/samples --out models/chess_expert.pt \
@@ -172,8 +171,10 @@ def main() -> None:
     parser.add_argument("--blocks", type=int, default=10)
     parser.add_argument("--val-split", type=float, default=0.05)
     parser.add_argument(
-        "--amp", choices=["on", "off"], default="on",
-        help="Mixed precision on GPU (biggest speedup). Use 'off' for fp32.",
+        "--amp", choices=["on", "off"], default="off",
+        help="Mixed-precision autocast. Off by default (it hangs/errs on some "
+             "GPUs). TF32 + cuDNN autotune are always on regardless. Try 'on' "
+             "for a possible extra speedup if your GPU likes it.",
     )
     parser.add_argument(
         "--channels-last", action="store_true",
