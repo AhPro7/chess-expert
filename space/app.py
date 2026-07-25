@@ -1,22 +1,18 @@
 """Gradio Space: play against Chess Expert in the browser.
 
-The Space stays tiny — it clones the engine code from GitHub and downloads the
-trained model from the Hugging Face Hub at startup, so only this file plus
-requirements.txt / README.md live in the Space repo.
+Self-contained Gradio SDK Space (no Docker): the engine code (`src/`, `demo/`) is
+bundled in the Space repo next to this file, and the trained model is downloaded
+from the Hugging Face Hub at startup.
 """
 
 import os
-import subprocess
 import sys
 
-CODE_REPO = os.environ.get("CODE_REPO", "https://github.com/AhPro7/chess-expert.git")
 MODEL_REPO = os.environ.get("MODEL_REPO", "Ahmed007/chess-expert")
 MODEL_FILE = os.environ.get("MODEL_FILE", "chess_expert.pt")
 
-# Pull the library code (encoding / model / engine / renderer) once at startup.
-if not os.path.isdir("chess-expert"):
-    subprocess.run(["git", "clone", "--depth", "1", CODE_REPO], check=True)
-sys.path.insert(0, os.path.abspath("chess-expert"))
+# The bundled src/ and demo/ packages sit next to this file.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import chess  # noqa: E402
 import gradio as gr  # noqa: E402

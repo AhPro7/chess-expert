@@ -27,10 +27,12 @@ version you use. The GIF is what stops the scroll — lead with it.
 > is the full ML-engineering loop: data pipeline → encoding → model → training →
 > deployment.
 >
-> Code + notebook are open source 👇 [link]
+> Code + notebook are open source, and you can **play it live in your browser** 👇
+> 🎮 Play: https://huggingface.co/spaces/Ahmed007/chess-expert
+> 💻 Code: [GitHub link]
 >
-> Next up (v2): adding a value head + search so it doesn't just *imitate* grandmasters
-> but starts to *outplay* opponents.
+> Next up: deeper search so it doesn't just *imitate* grandmasters but starts to
+> *outplay* opponents.
 >
 > #MachineLearning #DeepLearning #Chess #PyTorch #AI #ComputerScience
 
@@ -45,8 +47,9 @@ version you use. The GIF is what stops the scroll — lead with it.
 > would make, and legal-move masking guarantees it never plays an illegal move.
 > Trains on a GPU, plays on a CPU.
 >
-> Honest take: it imitates grandmasters, so it plays human-like chess but no search
-> means the occasional blunder. A clean end-to-end ML project — code below. 👇 [link]
+> Honest take: it imitates grandmasters, so it plays human-like chess with only
+> shallow search — so the occasional blunder. A clean end-to-end ML project.
+> 🎮 Play it live: https://huggingface.co/spaces/Ahmed007/chess-expert  · 💻 Code: [link]
 >
 > #DeepLearning #MachineLearning #Chess #PyTorch #AI
 
@@ -54,6 +57,8 @@ version you use. The GIF is what stops the scroll — lead with it.
 
 ## Tips for reach
 
+- **Let people play it** — the Hugging Face Space link lets readers try it in one
+  click, which drives comments and shares. Pin it in the first comment too.
 - **Post the GIF, not a screenshot** — motion gets far more engagement.
 - Put the GitHub link in the **first comment** as well as the post (LinkedIn softly
   down-ranks posts with outbound links in the body).

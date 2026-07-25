@@ -1,5 +1,9 @@
 # ♟️ Chess Expert
 
+[![Play online](https://img.shields.io/badge/🤗%20Hugging%20Face-Play%20online-yellow)](https://huggingface.co/spaces/Ahmed007/chess-expert)
+[![Model](https://img.shields.io/badge/🤗%20Model-Ahmed007%2Fchess--expert-blue)](https://huggingface.co/Ahmed007/chess-expert)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+
 A deep-learning model that plays chess. It learns purely from **grandmaster games** —
 no hand-written rules, no opening book, no search engine. Given a position, a
 convolutional neural network predicts the move a strong player would make.

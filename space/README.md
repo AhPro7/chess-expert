@@ -13,8 +13,11 @@ license: mit
 # Chess Expert — play a neural net that learned from grandmaster games
 
 Behavioral-cloning chess model (policy + value heads) with shallow look-ahead
-search. The Space downloads the model from the [`Ahmed007/chess-expert`](https://huggingface.co/Ahmed007/chess-expert)
-model repo and the engine code from [GitHub](https://github.com/AhPro7/chess-expert).
+search. Self-contained Gradio Space (no Docker): the engine code is bundled here
+and the model is downloaded from the
+[`Ahmed007/chess-expert`](https://huggingface.co/Ahmed007/chess-expert) model repo.
 
-Pick a move from the dropdown and press **Play**. Configure via Space secrets/vars:
-`MODEL_REPO`, `MODEL_FILE`, `CODE_REPO`.
+Pick a move from the dropdown and press **Play**. Configure via Space variables:
+`MODEL_REPO`, `MODEL_FILE`.
+
+Source: https://github.com/AhPro7/chess-expert

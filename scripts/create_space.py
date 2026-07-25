@@ -27,6 +27,7 @@ def create(repo_id: str, token: str, private: bool) -> None:
     )
     print(f"Space ready: https://huggingface.co/spaces/{repo_id}")
 
+    # Space entry files (app.py, requirements.txt, README.md with Gradio config).
     for name in ("app.py", "requirements.txt", "README.md"):
         api.upload_file(
             path_or_fileobj=os.path.join(_SPACE_DIR, name),
@@ -35,6 +36,18 @@ def create(repo_id: str, token: str, private: bool) -> None:
             repo_type="space",
         )
         print(f"  uploaded {name}")
+
+    # Bundle the engine code so the Space is self-contained (pure Gradio, no
+    # runtime cloning). Only .py files — no caches / big data.
+    for pkg in ("src", "demo"):
+        api.upload_folder(
+            folder_path=os.path.join(_HERE, pkg),
+            path_in_repo=pkg,
+            repo_id=repo_id,
+            repo_type="space",
+            allow_patterns=["*.py"],
+        )
+        print(f"  uploaded {pkg}/")
 
     print(f"\nBuilding now → https://huggingface.co/spaces/{repo_id}")
     print("First build takes a few minutes (installs torch). Then just play!")
