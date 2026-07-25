@@ -109,15 +109,28 @@ huggingface-cli login
 python scripts/upload_hf.py --repo-id YOUR_USERNAME/chess-expert
 ```
 
-**Play online:** create a Gradio Space (downloads the model from the Hub, pulls the
-engine code from GitHub — the Space repo stays tiny):
+**Play online (free, runs in the browser):** the model is exported to **ONNX** and
+runs client-side with onnxruntime-web — no server, no GPU, no paid Space. The site
+lives in [`docs/`](docs/) (`index.html` + vendored `chess.js` + the `.onnx`).
 
 ```bash
-python scripts/create_space.py --repo-id YOUR_USERNAME/chess-expert
-# → https://huggingface.co/spaces/YOUR_USERNAME/chess-expert
+# 1. Export the trained model to ONNX
+python scripts/export_onnx.py --checkpoint models/chess_expert.pt --out docs/chess_expert.onnx
 ```
 
-The Space app lives in [`space/`](space/).
+Then host it either way (both free):
+
+- **GitHub Pages:** commit `docs/chess_expert.onnx`, push, then enable
+  *Settings → Pages → Source: `main` / `docs`*. Live at
+  `https://YOUR_USERNAME.github.io/chess-expert/`.
+- **Hugging Face Static Space** (free, unlike Gradio which now needs PRO):
+  ```bash
+  huggingface-cli login
+  python scripts/create_static_space.py --repo-id YOUR_USERNAME/chess-expert
+  ```
+
+> A Gradio version also exists in [`space/`](space/), but hosting Gradio Spaces on
+> HF now requires a PRO subscription — the static ONNX site above is the free path.
 
 ---
 
