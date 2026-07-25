@@ -50,6 +50,14 @@ python -m demo.play_cli --checkpoint models/chess_expert.pt
 
 Enter moves in UCI (`e2e4`) or SAN (`Nf3`). Type `quit` to exit.
 
+**Prefer a board you can click?** In Colab or Jupyter:
+
+```python
+from demo.colab_gui import play
+play("models/chess_expert.pt")          # you are White — click a piece, then its target
+play("models/chess_expert.pt", human_white=False)  # play Black
+```
+
 > **Tip:** commit your trained `models/chess_expert.pt` to the repo so anyone who
 > clones can play instantly (the `.gitignore` is already set up to keep that one file).
 
