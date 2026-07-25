@@ -124,6 +124,8 @@ scripts/
 - **Style, not strength** → it imitates the *distribution* of grandmaster moves.
 - **v2 idea:** add a value head + a shallow search (alpha-beta / MCTS) to turn the
   imitator into an engine that actively *outplays* opponents.
+  <img width="480" height="480" alt="self_play" src="https://github.com/user-attachments/assets/b4578c68-ef25-4c60-8cfb-2bba18ea8536" />
+
 
 ## Data & credit
 
