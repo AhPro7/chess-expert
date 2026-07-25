@@ -105,6 +105,16 @@ huggingface-cli login
 python scripts/upload_hf.py --repo-id YOUR_USERNAME/chess-expert
 ```
 
+**Play online:** create a Gradio Space (downloads the model from the Hub, pulls the
+engine code from GitHub — the Space repo stays tiny):
+
+```bash
+python scripts/create_space.py --repo-id YOUR_USERNAME/chess-expert
+# → https://huggingface.co/spaces/YOUR_USERNAME/chess-expert
+```
+
+The Space app lives in [`space/`](space/).
+
 ---
 
 ## Project layout

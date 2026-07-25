@@ -1,0 +1,7 @@
+gradio>=4.0
+torch>=2.0
+python-chess>=1.11
+numpy>=1.24
+matplotlib>=3.7
+pillow>=10.0
+huggingface_hub>=0.20
