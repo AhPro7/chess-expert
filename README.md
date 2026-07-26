@@ -155,28 +155,39 @@ scripts/
 
 ---
 
-## Thinking ahead (value head + search)
+## Not hanging pieces (policy + a material safety net)
 
-The policy alone just imitates grandmaster moves — it has no notion of the future,
-so it sometimes hangs a piece. To fix that the model also has a **value head**
-(trained on game outcomes) and the engine can do a **shallow, policy-guided
-negamax search**: for each candidate move it looks a couple of plies ahead and
-scores the resulting position with the value head, so *"if I move here, my
-opponent grabs my queen"* gets caught. Enable it with `depth`:
+The policy alone just imitates grandmaster moves — no notion of the future — so it
+sometimes hangs a piece. The stronger levels fix this with a **shallow negamax
+search**:
+
+- **Candidates = the policy's top moves ∪ every capture ∪ every check.** Including
+  all captures is the key: the opponent's refuting capture is usually *outside* the
+  policy's favourites, so a top-K-only search never sees the piece being taken.
+- **Leaves are scored by material** (with a capture *quiescence*), i.e. "did that
+  lose or win a piece?" — not by the neural value head. Measured in self-play, the
+  value head is too weak/noisy and searching on it actually made the model *weaker*
+  (31% vs a plain greedy policy); the **material** search beats greedy (56%) and,
+  more importantly, stops the free hangs a human punishes.
+
+This is honest: the *ideas* still come 100% from the grandmaster-trained model —
+material is just basic piece values (a "don't give away pieces" rule), **not** an
+engine evaluation.
 
 ```python
-engine.select_move(board, depth=2)   # look 2 plies ahead (needs a value-trained model)
+engine.select_move(board, depth=2, eval_mode="material")
 ```
 
-The GUI turns this on by default. Older policy-only checkpoints automatically fall
-back to plain policy play.
+Quantify any change with the self-play arena: `python -m scripts.arena --a-depth 2 --b-depth 0`.
 
 ## Honest limitations
 
-- **Shallow search** → catches immediate tactics, not deep 5-move combinations.
-- **Style first** → it still imitates the *distribution* of grandmaster moves; the
-  search just keeps it from obvious blunders.
-- **v2 idea:** deeper search / MCTS, or a transformer with engine-distilled values.
+- **Shallow tactics only** → catches hangs and short combinations, not deep plans.
+- **Style first** → it imitates the *distribution* of grandmaster moves; the search
+  is a thin tactical safety net on top.
+- **The value head is weak** (game-outcome labels are noisy); it ships in the model
+  but the search deliberately ignores it in favour of material.
+- **v2 idea:** a sharper policy (more GM data), deeper search / MCTS.
   <img width="480" height="480" alt="self_play" src="https://github.com/user-attachments/assets/b4578c68-ef25-4c60-8cfb-2bba18ea8536" />
 
 

@@ -18,7 +18,12 @@ import chess
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.play import material_eval, negamax, search_move  # noqa: E402
+from src.play import (  # noqa: E402
+    material_eval,
+    negamax,
+    ordered_candidates,
+    search_move,
+)
 
 
 def test_material_eval_is_side_to_move_pov():
@@ -50,6 +55,46 @@ def test_search_takes_free_material():
     best, scores = search_move(board, depth=2, leaf_eval=material_eval)
     assert best == qxd4, "search should grab the free queen"
     assert scores[qxd4] > 0
+
+
+def test_captures_are_always_candidates_even_with_bad_policy():
+    """A capture must be searched even if the policy ranks it dead last.
+
+    This is the tactical blind-spot fix: refuting captures live outside the
+    policy's top moves, so a top-K-only candidate set never sees them.
+    """
+    board = chess.Board("rnbqkbnr/ppp1pppp/8/3p4/4P3/8/PPPP1PPP/RNBQKBNR w KQkq d6 0 2")
+    exd5 = chess.Move.from_uci("e4d5")
+    assert board.is_capture(exd5)
+    # Policy that hates captures (scores them 0, everything else 1) + branch=1.
+    policy = {m: (0.0 if board.is_capture(m) else 1.0) for m in board.legal_moves}
+    cands = ordered_candidates(board, policy, branch=1)
+    assert exd5 in cands, "capture must be force-included as a candidate"
+
+
+def test_search_sees_refutation_outside_policy():
+    """Depth-2 search must avoid hanging the queen even when the refuting capture
+    (…exd5) is outside the (mock) policy's preferred moves."""
+    board = chess.Board("4k3/8/4p3/3p4/8/8/8/3QK3 w - - 0 1")
+    qxd5 = chess.Move.from_uci("d1d5")
+
+    def bad_policy(b):
+        return {m: (0.0 if b.is_capture(m) else 1.0) for m in b.legal_moves}
+
+    good = lambda b: ordered_candidates(b, bad_policy(b), branch=1)   # noqa: E731
+    best, scores = search_move(board, depth=2, leaf_eval=material_eval,
+                               candidate_moves=good)
+    assert best != qxd5, "search must not hang the queen"
+    assert scores[qxd5] < 0
+
+    # Contrast: a top-1-policy-only candidate set (no forced captures) is blind to
+    # the refutation and would happily hang the queen.
+    blind = lambda b: sorted(  # noqa: E731
+        (m for m in b.legal_moves if m.promotion in (None, chess.QUEEN)),
+        key=lambda m: bad_policy(b)[m], reverse=True)[:1]
+    _, blind_scores = search_move(board, depth=2, leaf_eval=material_eval,
+                                  candidate_moves=blind)
+    assert blind_scores.get(qxd5, 0) >= 0, "sanity: blind search fails to see the loss"
 
 
 def test_negamax_scores_checkmate():

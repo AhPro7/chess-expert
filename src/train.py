@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import math
 import os
 import time
 
@@ -164,6 +165,25 @@ def train(args: argparse.Namespace) -> None:
     bs = args.batch_size
     total_batches = (train_n + bs - 1) // bs
 
+    # Cosine LR schedule with a short warmup (per optimizer step). Fast-forwarded
+    # to the resume point so continuing a run keeps the same curve.
+    scheduler = None
+    if args.cosine:
+        total_steps = max(1, args.epochs * total_batches)
+        warmup = max(1, int(0.03 * total_steps))
+
+        def lr_factor(step: int) -> float:
+            if step < warmup:
+                return (step + 1) / warmup
+            prog = (step - warmup) / max(1, total_steps - warmup)
+            return 0.5 * (1.0 + math.cos(math.pi * min(1.0, prog)))
+
+        done_steps = (start_epoch - 1) * total_batches
+        scheduler = torch.optim.lr_scheduler.LambdaLR(
+            optimizer, lr_factor, last_epoch=done_steps - 1)
+        print(f"Cosine LR: base {args.lr:g}, warmup {warmup} steps, "
+              f"{total_steps} total steps")
+
     def fetch(idx: torch.Tensor):
         """Gather a batch: uint8 CPU -> device -> float; move + value labels."""
         xb = pos_t.index_select(0, idx).to(device, non_blocking=True).float()
@@ -207,6 +227,8 @@ def train(args: argparse.Namespace) -> None:
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
+            if scheduler is not None:
+                scheduler.step()
 
             n = yb.size(0)
             batch_loss = loss.detach() * n
@@ -337,6 +359,10 @@ def main() -> None:
     parser.add_argument("--channels", type=int, default=128)
     parser.add_argument("--blocks", type=int, default=10)
     parser.add_argument("--val-split", type=float, default=0.05)
+    parser.add_argument(
+        "--cosine", action=argparse.BooleanOptionalAction, default=True,
+        help="Cosine LR schedule with warmup (--no-cosine for constant LR)",
+    )
     parser.add_argument(
         "--logdir", default="runs",
         help="TensorBoard log dir (empty string disables TB logging)",

@@ -59,8 +59,52 @@ def _terminal_score(board: chess.Board) -> float | None:
     return None
 
 
-def negamax(board: chess.Board, depth: int, leaf_eval, candidate_moves=None) -> float:
-    """Negamax: best achievable score for the side to move, looking `depth` ahead.
+def _legalq(board: chess.Board) -> list[chess.Move]:
+    """Legal moves, collapsing promotions to queen (matches training/encoding)."""
+    return [m for m in board.legal_moves if m.promotion in (None, chess.QUEEN)]
+
+
+def ordered_candidates(board: chess.Board, policy_scores: dict | None = None,
+                       branch: int = 5, max_cand: int = 16) -> list[chess.Move]:
+    """Moves to search at a node.
+
+    The set is  top-`branch` by policy  ∪  ALL captures  ∪  ALL checks.
+    Including every capture/check is what fixes the tactical blind spot: the
+    opponent's refuting capture is usually *outside* the policy's top moves, so a
+    top-K-only search never sees the piece being taken. Ordered captures
+    (MVV-LVA) → checks → policy so alpha-beta prunes well.
+
+    policy_scores maps move -> score (higher = more likely). None means "no policy"
+    (use all legal moves) — used by the material-stub tests.
+    """
+    legal = _legalq(board)
+    if policy_scores:
+        by_policy = sorted(legal, key=lambda m: policy_scores.get(m, -1.0), reverse=True)
+        keep = set(by_policy[:branch])
+    else:
+        keep = set(legal)
+    for m in legal:                       # force-include every capture and check
+        if board.is_capture(m) or board.gives_check(m):
+            keep.add(m)
+
+    def key(m: chess.Move):
+        if board.is_capture(m):
+            victim = (chess.PAWN if board.is_en_passant(m)
+                      else board.piece_at(m.to_square).piece_type)
+            attacker = board.piece_at(m.from_square).piece_type
+            # MVV-LVA: prefer taking a big piece with a small one.
+            return (3, _PIECE_VALUE[victim] * 10 - _PIECE_VALUE[attacker])
+        if board.gives_check(m):
+            return (2, 0.0)
+        return (1, policy_scores.get(m, 0.0) if policy_scores else 0.0)
+
+    ordered = sorted(keep, key=key, reverse=True)
+    return ordered[:max_cand] if max_cand else ordered
+
+
+def negamax(board: chess.Board, depth: int, leaf_eval, candidate_moves=None,
+            alpha: float = -math.inf, beta: float = math.inf) -> float:
+    """Negamax with alpha-beta: best score for the side to move, `depth` ahead.
 
     leaf_eval(board) -> float from the side-to-move POV.
     candidate_moves(board) -> iterable of moves to search (default: all legal).
@@ -71,21 +115,28 @@ def negamax(board: chess.Board, depth: int, leaf_eval, candidate_moves=None) -> 
     if depth <= 0:
         return leaf_eval(board)
 
-    moves = candidate_moves(board) if candidate_moves else list(board.legal_moves)
+    moves = candidate_moves(board) if candidate_moves else _legalq(board)
     best = -math.inf
     for move in moves:
         board.push(move)
-        score = -negamax(board, depth - 1, leaf_eval, candidate_moves)
+        score = -negamax(board, depth - 1, leaf_eval, candidate_moves, -beta, -alpha)
         board.pop()
         if score > best:
             best = score
+        if best > alpha:
+            alpha = best
+        if alpha >= beta:
+            break  # prune
     return best
 
 
-def search_move(board: chess.Board, depth: int, leaf_eval, candidate_moves=None,
-                margin: float = 1e-4):
-    """Return (best_move, {move: score}) via depth-`depth` negamax at the root."""
-    roots = list(candidate_moves(board)) if candidate_moves else list(board.legal_moves)
+def search_move(board: chess.Board, depth: int, leaf_eval, candidate_moves=None):
+    """Return (best_move, {move: score}) via depth-`depth` negamax at the root.
+
+    Every root candidate is searched with a full window so all scores are exact
+    (the caller may sample among near-best moves for variety).
+    """
+    roots = list(candidate_moves(board)) if candidate_moves else _legalq(board)
     scores: dict[chess.Move, float] = {}
     for move in roots:
         board.push(move)
@@ -93,9 +144,6 @@ def search_move(board: chess.Board, depth: int, leaf_eval, candidate_moves=None,
         board.pop()
     if not scores:
         return None, {}
-    best = max(scores.values())
-    # Among near-best moves (within margin), keep any one — the caller decides
-    # whether to pick deterministically or sample for variety.
     best_move = max(scores, key=scores.get)
     return best_move, scores
 
@@ -146,11 +194,22 @@ class ChessEngine:
         _, value = self._forward(board)
         return value
 
-    def _top_policy_moves(self, board: chess.Board, n: int) -> list[chess.Move]:
-        """The n most likely legal moves (search only these, to stay fast)."""
-        probs = self.move_probabilities(board)
-        ordered = sorted(probs, key=probs.get, reverse=True)
-        return ordered[:n] if n and n > 0 else ordered
+    def _candidates(self, board: chess.Board, branch: int) -> list[chess.Move]:
+        """Search candidates: top-`branch` policy moves ∪ all captures ∪ all checks."""
+        return ordered_candidates(board, self.move_probabilities(board), branch)
+
+    def _leaf_eval(self, mode: str):
+        """Leaf evaluator for the search (side-to-move POV).
+
+        'value'    — the neural value head (weak/OOD; search on it can hurt).
+        'material' — plain material count (cheap, honest tactical safety; no engine).
+        'blend'    — material (dominant, for tactics) + a small value-head nudge.
+        """
+        if mode == "material":
+            return material_eval
+        if mode == "blend":
+            return lambda b: material_eval(b) + 0.5 * self.evaluate(b)
+        return self.evaluate
 
     def select_move(
         self,
@@ -159,6 +218,7 @@ class ChessEngine:
         top_k: int | None = None,
         depth: int = 0,
         branch: int = 4,
+        eval_mode: str = "material",
     ) -> chess.Move | None:
         """Choose a legal move.
 
@@ -169,9 +229,10 @@ class ChessEngine:
             This is what avoids hanging pieces / makes it look smart.
         """
         # ---- Search path ----
-        if depth > 0 and self.has_value:
-            leaf = self.evaluate
-            candidates = lambda b: self._top_policy_moves(b, branch)  # noqa: E731
+        # 'material' needs no value head, so search works even for policy-only nets.
+        if depth > 0 and (self.has_value or eval_mode == "material"):
+            leaf = self._leaf_eval(eval_mode)
+            candidates = lambda b: self._candidates(b, branch)  # noqa: E731
             best_move, scores = search_move(board, depth, leaf, candidates)
             if not scores:
                 return None

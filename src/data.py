@@ -50,6 +50,7 @@ def pgn_to_samples(
     pgn_paths: list[str],
     min_elo: int = 0,
     max_games: int | None = None,
+    max_per_pos: int = 0,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Parse PGN file(s) into (positions, moves, values) numpy arrays.
 
@@ -60,13 +61,22 @@ def pgn_to_samples(
                    +1 if the side to move eventually won, -1 if it lost, 0 draw.
 
     Games with an unfinished result ("*") are skipped (no valid value target).
+
+    max_per_pos > 0 caps how many samples any single position contributes. Every
+    game shares the opening, so a handful of positions would otherwise dominate
+    the data and the model over-fits the opening; capping frees capacity for the
+    middlegame/endgame (where it currently "plays without purpose").
     """
+    from collections import Counter
+
     _RESULT = {"1-0": 1, "0-1": -1, "1/2-1/2": 0}  # from White's POV
 
     positions: list[np.ndarray] = []
     moves: list[int] = []
     values: list[int] = []
+    seen: Counter = Counter()
     games_used = 0
+    skipped = 0
 
     for path in pgn_paths:
         with open(path, "r", encoding="utf-8", errors="ignore") as handle:
@@ -84,6 +94,13 @@ def pgn_to_samples(
 
                 board = game.board()
                 for move in game.mainline_moves():
+                    if max_per_pos:
+                        key = board.board_fen() + ("w" if board.turn else "b")
+                        if seen[key] >= max_per_pos:
+                            board.push(move)  # advance but don't over-sample
+                            skipped += 1
+                            continue
+                        seen[key] += 1
                     # Store as uint8 right away to keep peak memory low.
                     positions.append(board_to_tensor(board).astype(np.uint8))
                     moves.append(move_to_index(move))
@@ -93,7 +110,8 @@ def pgn_to_samples(
 
                 games_used += 1
                 if games_used % 500 == 0:
-                    print(f"  parsed {games_used} games, {len(moves):,} positions")
+                    print(f"  parsed {games_used} games, {len(moves):,} positions"
+                          + (f" ({skipped:,} over-cap skipped)" if max_per_pos else ""))
 
         if max_games is not None and games_used >= max_games:
             break
@@ -154,6 +172,11 @@ def main() -> None:
         help="Keep games where both players are >= this Elo (0 = keep all)",
     )
     parser.add_argument("--max-games", type=int, default=None)
+    parser.add_argument(
+        "--max-per-pos", type=int, default=0,
+        help="Cap samples per unique position (0 = off). ~25 reduces opening "
+             "over-representation and improves middlegame/endgame learning.",
+    )
     args = parser.parse_args()
 
     if os.path.isdir(args.pgn):
@@ -162,7 +185,8 @@ def main() -> None:
         paths = sorted(glob.glob(args.pgn)) or [args.pgn]
     print(f"Reading {len(paths)} PGN file(s): {paths}")
 
-    positions, moves, values = pgn_to_samples(paths, args.min_elo, args.max_games)
+    positions, moves, values = pgn_to_samples(
+        paths, args.min_elo, args.max_games, args.max_per_pos)
 
     os.makedirs(args.out, exist_ok=True)
     np.save(os.path.join(args.out, "positions.npy"), positions)

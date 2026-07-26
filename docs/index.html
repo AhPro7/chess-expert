@@ -272,7 +272,7 @@
         <button class="tog diff-tog"        data-d="3">Master</button>
       </div>
     </div>
-    <div class="diff-desc" id="ddesc">Samples moves with randomness — great for beginners</div>
+    <div class="diff-desc" id="ddesc">Random-ish grandmaster-style moves — for beginners</div>
     <button class="btn-new" id="btn-new">↺ New Game</button>
   </div>
 
@@ -294,11 +294,14 @@ const PB = { p:"♟", n:"♞", b:"♝", r:"♜", q:"♛", k:"♚" };
 const PLANE = { p:0, n:1, b:2, r:3, q:4, k:5 };
 
 // ── Difficulty presets ───────────────────────────────────────────────────────
+// The model (policy) proposes grandmaster-style moves; a shallow MATERIAL search
+// (with capture quiescence) keeps the smart levels from hanging pieces. No engine
+// eval — just piece values as a "don't give away material" safety net.
 const DIFF = [
-  { label:"Beginner", depth:0, topK:1, temp:1.6, desc:"Samples moves with randomness — great for beginners" },
-  { label:"Club",     depth:0, topK:1, temp:0,   desc:"Always plays the model's top-ranked policy move" },
-  { label:"Advanced", depth:1, topK:5, temp:0,   desc:"1-ply value search — avoids obvious blunders (~1 s)" },
-  { label:"Master",   depth:2, topK:5, temp:0,   desc:"2-ply value search — strong, may take a few seconds" },
+  { label:"Beginner", depth:0, branch:1, temp:1.6, desc:"Random-ish grandmaster-style moves — for beginners" },
+  { label:"Club",     depth:0, branch:1, temp:0,   desc:"The model's top grandmaster move (no tactics check)" },
+  { label:"Advanced", depth:1, branch:5, temp:0,   desc:"Checks it isn't hanging a piece (~1 s)" },
+  { label:"Master",   depth:2, branch:6, temp:0,   desc:"2-ply tactical safety search (~2–3 s)" },
 ];
 let diffIdx = 0;
 
@@ -354,29 +357,70 @@ function legalQ() {
   return chess.moves({ verbose:true }).filter(m => !m.promotion || m.promotion === "q");
 }
 
-// ── Negamax with value head (depth > 0 only) ─────────────────────────────────
-async function negamax(depth, alpha, beta, topK) {
-  if (chess.game_over()) return chess.in_checkmate() ? -1e6 : 0;
-  const { policy, value } = await infer();
-  if (depth <= 0) return value;   // leaf: value-head evaluation
+// ── Material evaluation (side-to-move POV, in pawns) ─────────────────────────
+const VAL = { p:1, n:3, b:3, r:5, q:9, k:0 };
+function materialEval() {
+  let s = 0;
+  for (const row of chess.board())
+    for (const pc of row)
+      if (pc) s += (pc.color === chess.turn() ? 1 : -1) * VAL[pc.type];
+  return s;
+}
+function isCap(m) { return m.flags.includes("c") || m.flags.includes("e"); }
+function isChk(m) { return m.san.includes("+") || m.san.includes("#"); }
 
+// ── Capture quiescence (material only, NO neural-net calls → fast) ────────────
+// Resolves capture sequences so a leaf never mis-scores a hanging piece.
+function quiescence(alpha, beta) {
+  if (chess.in_checkmate()) return -1e6;
+  if (chess.in_stalemate() || chess.in_draw()) return 0;
+  let stand = materialEval();
+  if (stand >= beta) return beta;
+  if (stand > alpha) alpha = stand;
+  const caps = chess.moves({ verbose:true })
+    .filter(m => isCap(m) && (!m.promotion || m.promotion === "q"))
+    .sort((a,b) => (VAL[b.captured||"p"]*10 - VAL[b.piece]) - (VAL[a.captured||"p"]*10 - VAL[a.piece]));
+  for (const m of caps) {
+    chess.move({ from:m.from, to:m.to, promotion:"q" });
+    const score = -quiescence(-beta, -alpha);
+    chess.undo();
+    if (score >= beta) return beta;
+    if (score > alpha) alpha = score;
+  }
+  return alpha;
+}
+
+// ── Candidate moves: top-`branch` policy ∪ ALL captures ∪ ALL checks ─────────
+// Including every capture/check is what lets the search SEE a refutation that
+// the policy ranks low — the fix for hanging pieces.
+function candidateMoves(policy, branch) {
   const moves = legalQ();
-  if (!moves.length) return 0;
+  const keep = new Map();
+  moves.map(m => ({ m, s: policy[sqidx(m.from)*64 + sqidx(m.to)] }))
+       .sort((a,b) => b.s - a.s)
+       .slice(0, branch)
+       .forEach(({ m }) => keep.set(m.from + m.to, m));
+  for (const m of moves) if (isCap(m) || isChk(m)) keep.set(m.from + m.to, m);
+  const ordKey = m => isCap(m) ? 30000 + VAL[m.captured||"p"]*10 - VAL[m.piece]
+                    : isChk(m) ? 20000
+                    : 10000 + policy[sqidx(m.from)*64 + sqidx(m.to)];
+  return [...keep.values()].sort((a,b) => ordKey(b) - ordKey(a)).slice(0, 14);
+}
 
-  // Search only the top-K moves by policy logit (keeps it fast)
-  const cands = moves
-    .map(m => ({ m, s: policy[sqidx(m.from)*64 + sqidx(m.to)] }))
-    .sort((a,b) => b.s - a.s)
-    .slice(0, topK);
-
+// ── Negamax: policy-guided candidates, material quiescence at the leaves ──────
+async function negamax(depth, alpha, beta, branch) {
+  if (chess.in_checkmate()) return -1e6;
+  if (chess.in_stalemate() || chess.in_draw()) return 0;
+  if (depth <= 0) return quiescence(alpha, beta);   // no NN below here → fast
+  const { policy } = await infer();
   let best = -Infinity;
-  for (const { m } of cands) {
-    chess.move({ from: m.from, to: m.to, promotion: "q" });
-    const score = -(await negamax(depth-1, -beta, -alpha, topK));
+  for (const m of candidateMoves(policy, branch)) {
+    chess.move({ from:m.from, to:m.to, promotion:"q" });
+    const score = -(await negamax(depth-1, -beta, -alpha, branch));
     chess.undo();
     if (score > best)  best  = score;
     if (best  > alpha) alpha = best;
-    if (alpha >= beta) break;          // alpha-beta pruning
+    if (alpha >= beta) break;   // alpha-beta prune
   }
   return best;
 }
@@ -385,37 +429,28 @@ async function negamax(depth, alpha, beta, topK) {
 async function pickMove() {
   const moves = legalQ();
   if (!moves.length) return null;
-
   const cfg = DIFF[diffIdx];
   const { policy } = await infer();
+  const logit = m => policy[sqidx(m.from)*64 + sqidx(m.to)];
 
-  const scored = moves.map(m => ({
-    move: m, logit: policy[sqidx(m.from)*64 + sqidx(m.to)],
-  }));
-
-  if (cfg.depth === 0) {
-    if (cfg.temp <= 0) {
-      // Greedy — pick highest policy logit
-      return scored.reduce((a,b) => b.logit > a.logit ? b : a).move;
-    }
-    // Temperature sampling
-    const maxL = Math.max(...scored.map(x => x.logit));
-    const w    = scored.map(x => Math.exp((x.logit - maxL) / cfg.temp));
+  if (cfg.depth === 0) {                       // pure policy (no search)
+    if (cfg.temp <= 0) return moves.reduce((a,b) => logit(b) > logit(a) ? b : a);
+    const maxL = Math.max(...moves.map(logit));
+    const w    = moves.map(m => Math.exp((logit(m) - maxL) / cfg.temp));
     const tot  = w.reduce((a,b) => a+b, 0);
     let r = Math.random() * tot;
-    for (let i = 0; i < scored.length; i++) { r -= w[i]; if (r <= 0) return scored[i].move; }
-    return scored[0].move;
+    for (let i = 0; i < moves.length; i++) { r -= w[i]; if (r <= 0) return moves[i]; }
+    return moves[0];
   }
 
-  // Depth-search path: evaluate top-K candidates with negamax
-  const cands = [...scored].sort((a,b) => b.logit - a.logit).slice(0, cfg.topK);
-  let bestMove  = cands[0].move;
-  let bestScore = -Infinity;
-  for (const { move } of cands) {
-    chess.move({ from: move.from, to: move.to, promotion: "q" });
-    const score = -(await negamax(cfg.depth-1, -Infinity, Infinity, cfg.topK));
+  // Material search over policy candidates
+  const cands = candidateMoves(policy, cfg.branch);
+  let bestMove = cands[0], bestScore = -Infinity;
+  for (const m of cands) {
+    chess.move({ from:m.from, to:m.to, promotion:"q" });
+    const score = -(await negamax(cfg.depth - 1, -Infinity, Infinity, cfg.branch));
     chess.undo();
-    if (score > bestScore) { bestScore = score; bestMove = move; }
+    if (score > bestScore) { bestScore = score; bestMove = m; }
   }
   return bestMove;
 }

@@ -12,7 +12,15 @@ set -euo pipefail
 mkdir -p data
 cd data
 
-PLAYERS=(Carlsen Kasparov Fischer Karpov Anand Kramnik Caruana Nakamura)
+# ~40 titled grandmasters (world champions + top modern players + classics).
+# Missing archives are skipped automatically, so it's safe to list generously.
+PLAYERS=(
+  Carlsen Kasparov Fischer Karpov Anand Kramnik Caruana Nakamura Aronian
+  Nepomniachtchi Giri Grischuk Mamedyarov Radjabov Topalov Ivanchuk Gelfand
+  Leko Svidler Morozevich Shirov Adams Short Ding So Firouzja Rapport Duda
+  Tal Botvinnik Petrosian Spassky Smyslov Korchnoi Bronstein Keres Capablanca
+  Alekhine Rubinstein Euwe Larsen Portisch Polgar Beliavsky
+)
 BASE="https://www.pgnmentor.com/players"
 
 for player in "${PLAYERS[@]}"; do
