@@ -56,18 +56,34 @@ def _fit_font(d, text, size, w, margin=40):
     return _font(12)
 
 
-def title_card(size, big, small, accent=FG, credit="", sub2=""):
-    """A centered card: BIG headline, small subtitle, optional 2nd sub + credit."""
+def title_card(size, big, small, accent=FG, credit="", sub2="",
+               big_size=54, small_size=30, sub2_size=26):
+    """A centered card: BIG headline, subtitle, optional 2nd sub + a styled credit.
+
+    big_size/small_size/sub2_size let a card (e.g. the intro) run larger without
+    changing the others. Lines are stacked dynamically so bigger fonts never overlap.
+    """
     w, h = size
     img = Image.new("RGB", (w, h), BG)
     d = ImageDraw.Draw(img)
-    cy = h // 2
-    _centered(d, cy - 70, big, _fit_font(d, big, 54, w), accent, w)
-    _centered(d, cy - 2, small, _fit_font(d, small, 30, w), (170, 168, 164), w)
+
+    lines = [(big, _fit_font(d, big, big_size, w), accent),
+             (small, _fit_font(d, small, small_size, w), (175, 173, 169))]
     if sub2:
-        _centered(d, cy + 40, sub2, _fit_font(d, sub2, 26, w), GREEN, w)
+        lines.append((sub2, _fit_font(d, sub2, sub2_size, w), GREEN))
+
+    gap = 18
+    block = sum(f.size for _, f, _ in lines) + gap * (len(lines) - 1)
+    y = (h - block) // 2 - (24 if credit else 0)  # leave room for the credit
+    for text, f, col in lines:
+        _centered(d, y, text, f, col, w)
+        y += f.size + gap
+
     if credit:
-        _centered(d, h - 56, credit, _font(22), (150, 148, 144), w)
+        cf = _font(30)
+        cyc = h - 76
+        d.line([(w / 2 - 46, cyc - 16), (w / 2 + 46, cyc - 16)], fill=GREEN, width=4)
+        _centered(d, cyc, credit, cf, (234, 232, 229), w)
     return img
 
 
@@ -154,7 +170,8 @@ def main() -> None:
         size, "Chess Expert",
         "a neural net that learned from grandmasters",
         sub2="beats Stockfish — highlight reel",
-        credit="by Ahmed Haytham")] * 10
+        credit="by Ahmed Haytham",
+        big_size=68, small_size=34, sub2_size=34)] * 10
 
     elos_beaten = []
     for i, pgn in enumerate(pgns, 1):
