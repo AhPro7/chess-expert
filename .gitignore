@@ -7,6 +7,12 @@ data/samples/
 # TensorBoard logs (uploaded to HF Hub instead of git)
 runs/
 
+# Generated game media (large; regenerate with scripts/showcase.py / win_reel.py)
+demo/*.mp4
+demo/*.gif
+demo/*.pgn
+demo/wins/
+
 # Python
 __pycache__/
 *.pyc
