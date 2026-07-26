@@ -270,6 +270,8 @@
         <button class="tog diff-tog"        data-d="1">Club</button>
         <button class="tog diff-tog"        data-d="2">Advanced</button>
         <button class="tog diff-tog"        data-d="3">Master</button>
+        <button class="tog diff-tog"        data-d="4">Grandmaster</button>
+        <button class="tog diff-tog"        data-d="5">Super Master</button>
       </div>
     </div>
     <div class="diff-desc" id="ddesc">Random-ish grandmaster-style moves — for beginners</div>
@@ -302,6 +304,8 @@ const DIFF = [
   { label:"Club",     depth:0, branch:1, temp:0,   desc:"The model's top grandmaster move (no tactics check)" },
   { label:"Advanced", depth:1, branch:5, temp:0,   desc:"Checks it isn't hanging a piece (~1 s)" },
   { label:"Master",   depth:2, branch:6, temp:0,   desc:"2-ply tactical safety search (~2–3 s)" },
+  { label:"Grandmaster", depth:3, branch:6, temp:0, desc:"Deeper 3-ply search — stronger, slower (~10–30 s per move)" },
+  { label:"Super Master", depth:4, branch:6, temp:0, desc:"Deepest 4-ply search — strongest in-browser, but SLOW (~1–3 min per move)" },
 ];
 let diffIdx = 0;
 
