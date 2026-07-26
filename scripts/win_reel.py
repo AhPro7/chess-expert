@@ -46,31 +46,50 @@ def _centered(d, y, text, font, fill, w):
     d.text(((w - tw) / 2, y), text, fill=fill, font=font)
 
 
-def title_card(size, big, small, accent=FG):
+def _fit_font(d, text, size, w, margin=40):
+    """Largest font <= `size` whose `text` fits within `w - margin`."""
+    while size > 12:
+        f = _font(size)
+        if d.textlength(text, font=f) <= w - margin:
+            return f
+        size -= 2
+    return _font(12)
+
+
+def title_card(size, big, small, accent=FG, credit="", sub2=""):
+    """A centered card: BIG headline, small subtitle, optional 2nd sub + credit."""
     w, h = size
     img = Image.new("RGB", (w, h), BG)
     d = ImageDraw.Draw(img)
-    _centered(d, h // 2 - 46, big, _font(34), accent, w)
-    _centered(d, h // 2 + 6, small, _font(20), (150, 148, 144), w)
+    cy = h // 2
+    _centered(d, cy - 70, big, _fit_font(d, big, 54, w), accent, w)
+    _centered(d, cy - 2, small, _fit_font(d, small, 30, w), (170, 168, 164), w)
+    if sub2:
+        _centered(d, cy + 40, sub2, _fit_font(d, sub2, 26, w), GREEN, w)
+    if credit:
+        _centered(d, h - 56, credit, _font(22), (150, 148, 144), w)
     return img
 
 
 def board_frame(board, white, black, last_move=None, last_label="", banner=""):
     bimg = render_board(board, last_move=last_move)
     w = bimg.width
-    bar = 46
+    bar = 64
     out = Image.new("RGB", (w, bimg.height + 2 * bar), BG)
     d = ImageDraw.Draw(out)
 
     def player(y, name, is_white, right):
         cy = y + bar // 2
-        d.ellipse([14, cy - 9, 32, cy + 9],
+        r = 12
+        d.ellipse([16, cy - r, 16 + 2 * r, cy + r],
                   fill=(240, 240, 240) if is_white else (20, 20, 20),
-                  outline=(150, 150, 150))
-        d.text((42, cy - 11), name, fill=FG, font=_font(19))
+                  outline=(150, 150, 150), width=2)
+        nf = _font(26)
+        d.text((16 + 2 * r + 12, cy - 16), name, fill=FG, font=nf)
         if right:
-            d.text((w - 14 - d.textlength(right, font=_font(14)), cy - 8),
-                   right, fill=GREEN, font=_font(14))
+            rf = _font(22)
+            d.text((w - 16 - d.textlength(right, font=rf), cy - 14),
+                   right, fill=GREEN, font=rf)
 
     player(0, black, False, last_label if ".." in last_label else "")
     out.paste(bimg, (0, bar))
@@ -78,12 +97,13 @@ def board_frame(board, white, black, last_move=None, last_label="", banner=""):
            last_label if ".." not in last_label else "")
 
     if banner:
-        bw, bh = 160, 48
+        bw, bh = 260, 78
         bx, by = (w - bw) // 2, bar + (bimg.height - bh) // 2
-        d.rectangle([bx, by, bx + bw, by + bh], fill=(30, 110, 40), outline=GREEN, width=3)
-        f = _font(26)
+        d.rectangle([bx, by, bx + bw, by + bh], fill=(30, 110, 40),
+                    outline=GREEN, width=5)
+        f = _font(48)
         tw = d.textlength(banner, font=f)
-        d.text((bx + (bw - tw) / 2, by + (bh - 30) / 2), banner,
+        d.text((bx + (bw - tw) / 2, by + (bh - 52) / 2), banner,
                fill=(255, 255, 255), font=f)
     return out
 
@@ -125,15 +145,37 @@ def main() -> None:
         raise SystemExit(f"No winning PGNs found in {args.wins}/")
     print(f"Building reel from {len(pgns)} win(s)")
 
+    def _elo_of(opp: str) -> str:
+        digits = "".join(ch for ch in opp if ch.isdigit())
+        return digits or "?"
+
     size = board_frame(chess.Board(), "a", "b").size
-    frames = [title_card(size, "♟  Chess Expert", "beats Stockfish — highlight reel")] * 8
+    frames = [title_card(
+        size, "Chess Expert",
+        "a neural net that learned from grandmasters",
+        sub2="beats Stockfish — highlight reel",
+        credit="by Ahmed Haytham")] * 10
+
+    elos_beaten = []
     for i, pgn in enumerate(pgns, 1):
         gframes, white, black, result = game_frames(pgn)
         opp = black if "Chess Expert" in white else white
-        frames += [title_card(size, f"Game {i}", f"Chess Expert  vs  {opp}", GREEN)] * 6
+        elo = _elo_of(opp)
+        if elo not in elos_beaten:
+            elos_beaten.append(elo)
+        frames += [title_card(size, f"Game {i}", "Chess Expert defeats",
+                              accent=GREEN, sub2=f"Stockfish {elo}")] * 7
         frames += gframes
         print(f"  + game {i}: {white} vs {black} ({result}) — {len(gframes)} frames")
-    frames += [title_card(size, f"{len(pgns)} wins", "github.com/AhPro7/chess-expert")] * 10
+
+    # sort Elos numerically for the summary card
+    elos_sorted = sorted(elos_beaten, key=lambda x: int(x) if x.isdigit() else 0)
+    beat_line = "Beat Stockfish  " + "  ·  ".join(elos_sorted) if elos_sorted else ""
+    frames += [title_card(
+        size, f"{len(pgns)} wins",
+        beat_line,
+        sub2="github.com/AhPro7/chess-expert",
+        credit="by Ahmed Haytham")] * 12
 
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     if shutil.which("ffmpeg"):
