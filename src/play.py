@@ -161,12 +161,32 @@ class ChessEngine:
         self.model.load_state_dict(ckpt["state_dict"], strict=False)
         self.model.eval()
         self.has_value = bool(ckpt.get("value_trained", False))
+        # Position-keyed cache of the NN forward pass. The search hits the same
+        # position via many move-orders (transpositions), so memoizing the
+        # (deterministic, eval-mode) forward gives identical results far faster.
+        # Bounded so the engine — reused across a whole tournament — can't OOM.
+        self._eval_cache: dict = {}
+        self._cache_max = 200_000
+        self._nn_calls = 0    # instrumentation: actual forward passes run
+        self._cache_hits = 0  # instrumentation: forwards served from cache
 
     @torch.no_grad()
     def _forward(self, board: chess.Board):
+        # `_transposition_key()` is what python-chess uses for repetition — a
+        # collision-free position identity (pieces, turn, castling, ep). Safe key.
+        key = board._transposition_key()
+        cached = self._eval_cache.get(key)
+        if cached is not None:
+            self._cache_hits += 1
+            return cached
         tensor = torch.from_numpy(board_to_tensor(board)).unsqueeze(0).to(self.device)
         policy_logits, value = self.model(tensor)
-        return policy_logits.squeeze(0).cpu().numpy(), float(value.item())
+        out = (policy_logits.squeeze(0).cpu().numpy(), float(value.item()))
+        self._nn_calls += 1
+        if len(self._eval_cache) >= self._cache_max:
+            self._eval_cache.clear()  # simple bound; keeps the common case fast
+        self._eval_cache[key] = out
+        return out
 
     def move_probabilities(self, board: chess.Board) -> dict[chess.Move, float]:
         """Softmax probabilities over the *legal* moves for this position."""
@@ -194,9 +214,14 @@ class ChessEngine:
         _, value = self._forward(board)
         return value
 
-    def _candidates(self, board: chess.Board, branch: int) -> list[chess.Move]:
-        """Search candidates: top-`branch` policy moves ∪ all captures ∪ all checks."""
-        return ordered_candidates(board, self.move_probabilities(board), branch)
+    def _candidates(self, board: chess.Board, branch: int,
+                    max_cand: int = 16) -> list[chess.Move]:
+        """Search candidates: top-`branch` policy moves ∪ all captures ∪ all checks.
+
+        `max_cand` caps the per-node width — the search's effective branching base.
+        Lowering it attacks the exponent directly (biggest speed lever at depth ≥6).
+        """
+        return ordered_candidates(board, self.move_probabilities(board), branch, max_cand)
 
     def _leaf_eval(self, mode: str):
         """Leaf evaluator for the search (side-to-move POV).
@@ -218,6 +243,7 @@ class ChessEngine:
         top_k: int | None = None,
         depth: int = 0,
         branch: int = 4,
+        max_cand: int = 16,
         eval_mode: str = "material",
     ) -> chess.Move | None:
         """Choose a legal move.
@@ -232,7 +258,7 @@ class ChessEngine:
         # 'material' needs no value head, so search works even for policy-only nets.
         if depth > 0 and (self.has_value or eval_mode == "material"):
             leaf = self._leaf_eval(eval_mode)
-            candidates = lambda b: self._candidates(b, branch)  # noqa: E731
+            candidates = lambda b: self._candidates(b, branch, max_cand)  # noqa: E731
             best_move, scores = search_move(board, depth, leaf, candidates)
             if not scores:
                 return None

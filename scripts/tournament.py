@@ -29,7 +29,8 @@ import torch  # noqa: E402
 from src.play import ChessEngine  # noqa: E402
 
 
-def play_game(engine, sf, model_white, depth, temp, sf_time, max_plies, headers):
+def play_game(engine, sf, model_white, depth, temp, sf_time, max_plies, headers,
+              branch=4, max_cand=16):
     board = chess.Board()
     game = chess.pgn.Game()
     game.headers.update(headers)
@@ -38,7 +39,8 @@ def play_game(engine, sf, model_white, depth, temp, sf_time, max_plies, headers)
     while not board.is_game_over(claim_draw=True) and plies < max_plies:
         if (board.turn == chess.WHITE) == model_white:
             mv = engine.select_move(board, depth=depth, eval_mode="material",
-                                    temperature=temp, top_k=5)
+                                    temperature=temp, top_k=5,
+                                    branch=branch, max_cand=max_cand)
         else:
             mv = sf.play(board, chess.engine.Limit(time=sf_time)).move
         if mv is None:
@@ -58,6 +60,10 @@ def main() -> None:
     p.add_argument("--elos", type=int, nargs="+", default=[1300, 1400, 1500, 1600, 1700])
     p.add_argument("--games", type=int, default=3, help="games per Elo")
     p.add_argument("--depth", type=int, default=5)
+    p.add_argument("--branch", type=int, default=4,
+                   help="quiet-move width per node (captures/checks always added)")
+    p.add_argument("--max-cand", type=int, default=16,
+                   help="hard cap on candidates per node — lower = faster, weaker")
     p.add_argument("--temp", type=float, default=0.15)
     p.add_argument("--sf-time", type=float, default=0.1)
     p.add_argument("--max-plies", type=int, default=220)
@@ -67,9 +73,11 @@ def main() -> None:
     args = p.parse_args()
 
     device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Device: {device} | depth {args.depth}")
+    print(f"Device: {device} | depth {args.depth} | branch {args.branch} "
+          f"| max-cand {args.max_cand}")
     if args.depth >= 8:
-        print("⚠️  depth >= 8 may take a very long time per move — consider 4–6.")
+        print("⚠️  depth >= 8 explodes exponentially. To keep it usable, narrow the "
+              "tree: e.g. --branch 3 --max-cand 8 (faster, a bit weaker).")
 
     engine = ChessEngine(args.checkpoint, device=device)
     sf = chess.engine.SimpleEngine.popen_uci(args.stockfish)
@@ -91,7 +99,8 @@ def main() -> None:
                 }
                 result, game, won, plies = play_game(
                     engine, sf, model_white, args.depth, args.temp,
-                    args.sf_time, args.max_plies, headers)
+                    args.sf_time, args.max_plies, headers,
+                    branch=args.branch, max_cand=args.max_cand)
                 w += won
                 d += result == "1/2-1/2" or (result == "*" and not won)
                 l += not won and result not in ("1/2-1/2", "*")
