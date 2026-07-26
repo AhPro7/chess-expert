@@ -16,10 +16,14 @@ score from A's perspective. Use it to (a) confirm search actually helps
 from __future__ import annotations
 
 import argparse
+import os
+import sys
 
 import chess
 
-from src.play import ChessEngine, material_eval
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from src.play import ChessEngine, material_eval  # noqa: E402
 
 
 def play_game(ea, cfg_a, eb, cfg_b, a_is_white, max_plies, adj):

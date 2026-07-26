@@ -39,15 +39,28 @@ def _font(size: int):
     return ImageFont.load_default()
 
 
-def caption(board_img: Image.Image, title: str, sub: str) -> Image.Image:
-    """Add a header strip above the board with a title + subtitle."""
+def frame(board_img: Image.Image, white_name: str, black_name: str,
+          last_move: str = "", result: str = "*") -> Image.Image:
+    """Board with player-name bars (Black above, White below), chess.com style."""
     w = board_img.width
-    strip_h = 52
-    out = Image.new("RGB", (w, board_img.height + strip_h), (26, 24, 22))
+    bar = 46
+    out = Image.new("RGB", (w, board_img.height + 2 * bar), (26, 24, 22))
     d = ImageDraw.Draw(out)
-    d.text((12, 8), title, fill=(232, 230, 227), font=_font(22))
-    d.text((12, 32), sub, fill=(150, 190, 90), font=_font(14))
-    out.paste(board_img, (0, strip_h))
+    name_font, small = _font(19), _font(14)
+
+    def player_bar(y: int, name: str, is_white: bool, right: str) -> None:
+        cy = y + bar // 2
+        disc = (240, 240, 240) if is_white else (20, 20, 20)
+        d.ellipse([14, cy - 9, 32, cy + 9], fill=disc, outline=(150, 150, 150))
+        d.text((42, cy - 11), name, fill=(232, 230, 227), font=name_font)
+        if right:
+            tw = d.textlength(right, font=small)
+            d.text((w - 14 - tw, cy - 8), right, fill=(150, 190, 90), font=small)
+
+    player_bar(0, black_name, False, last_move)            # Black on top
+    out.paste(board_img, (0, bar))
+    bottom = "Result " + result if result != "*" else "github.com/AhPro7/chess-expert"
+    player_bar(bar + board_img.height, white_name, True, bottom)  # White below
     return out
 
 
@@ -77,7 +90,7 @@ def main() -> None:
     game.headers.update({"Event": "Chess Expert showcase", "Site": "github.com/AhPro7/chess-expert",
                          "White": white_name, "Black": black_name})
     node = game
-    frames = [caption(render_board(board), "Chess Expert", "grandmaster-trained neural net")]
+    frames = [frame(render_board(board), white_name, black_name)]
 
     plies = 0
     while not board.is_game_over(claim_draw=True) and plies < args.max_plies:
@@ -93,9 +106,8 @@ def main() -> None:
         label = f"{num}.{'' if board.turn == chess.WHITE else '..'} {san}"
         board.push(move)
         node = node.add_variation(move)
-        frames.append(caption(render_board(board, last_move=move),
-                              f"Chess Expert   ·   move {label}",
-                              f"{white_name} vs {black_name}"))
+        frames.append(frame(render_board(board, last_move=move),
+                            white_name, black_name, last_move=label))
         plies += 1
 
     result = board.result(claim_draw=True)
@@ -104,8 +116,7 @@ def main() -> None:
         sf.quit()
 
     # Hold the final position with the result.
-    frames += [caption(render_board(board), f"Result: {result}",
-                       f"{white_name} vs {black_name}")] * 6
+    frames += [frame(render_board(board), white_name, black_name, result=result)] * 6
 
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     gif_path, pgn_path = args.out + ".gif", args.out + ".pgn"

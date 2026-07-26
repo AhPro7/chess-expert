@@ -12,11 +12,15 @@ Requires a `stockfish` binary on PATH (brew install stockfish).
 from __future__ import annotations
 
 import argparse
+import os
+import sys
 
 import chess
 import chess.engine
 
-from src.play import ChessEngine
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from src.play import ChessEngine  # noqa: E402
 
 
 def play_game(our, sf, our_white, depth, temp, sf_time, max_plies):
